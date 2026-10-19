@@ -28,13 +28,17 @@ Live at <https://reallyitsandi.com/shared-list/>.
   changes within a few seconds.
 - **Typed columns.** Money columns total up, along with "how much is left" for
   rows that aren't ticked yet. Choice columns become colored tags and can group
-  the rows. Links show their site; image links show a thumbnail.
+  the rows. Links show their site; image links show a thumbnail. Columns can
+  be narrow or wide, hidden from the table, and the list can have a default sort.
+- **Paste a link, get the price.** A shop link fills in the row's price, photo
+  and name from the page. Paste one straight into *Add item…* and that's the
+  whole row. See [Link lookups](#link-lookups).
 - **Per-list CSS.** Every list has a stylesheet that restyles its page for
   everyone. The default look is built on `--sl-*` variables and stable class
   names, so most themes are a few lines. See [Styling](#styling).
-- **MCP.** Sixteen tools over Streamable HTTP to create, read, edit and restyle
-  lists, with tokens that only the server's operator can make. See
-  [For agents](#for-agents).
+- **MCP.** Eighteen tools over Streamable HTTP. Agents can create, read, edit
+  and restyle lists, lay out their columns, and look links up. Tokens can only
+  be made by the server's operator. See [For agents](#for-agents).
 - **Small.** One Node process and one SQLite file. No build step on the server,
   two runtime dependencies, about 50 MB of memory.
 
@@ -95,10 +99,12 @@ private, and remember that it ends up in the proxy's access log.
 | `open_list` | Get access to someone else's list with its password |
 | `get_list` | Columns, items (with ids) and view settings |
 | `create_list` | A new list with a password, from columns or a preset, optionally with items and CSS |
-| `update_list` | Title, description, grouping, password, edit access |
+| `update_list` | Title, description, grouping, default sort, password, edit access |
 | `delete_list` | Delete a list |
-| `add_columns` / `update_column` / `remove_column` | Change the columns; retyping keeps the values that still fit |
+| `add_columns` / `update_column` / `remove_column` | Change the columns: name, type, options, order, width, hidden, and what a link column fills. Retyping keeps the values that still fit |
 | `add_items` / `update_items` / `remove_items` / `move_item` | Change the rows |
+| `preview_link` | Read a shop page's name, photo and price without saving anything |
+| `look_up_links` | Look the links in some rows up again and fill what is empty |
 | `get_style_guide` | The class names and variables a list's CSS can use |
 | `get_css` / `set_css` | Read or replace a list's CSS |
 
@@ -110,6 +116,36 @@ nothing, and the error says which column refused what.
 Try asking: *"Make a shared list for our apartment furniture with item, room,
 price, link and who's buying it, password couch123. Add a sofa, a bed frame and
 a dining table. Then make it look warm and cozy."*
+
+## Link lookups
+
+When a link lands in a link column, the server reads the page in the background.
+It fills the row's price, photo and name, but only cells that are empty. Nothing
+anyone typed is overwritten, and a price in a different currency from the
+column's is kept with the row rather than filled in. The row shows *Looking up…*
+while it works, and the item's form says what was found, or why nothing was.
+
+It reads, in order of trust:
+
+1. schema.org `Product` data (JSON-LD), which most shop platforms publish,
+2. Open Graph and `product:price` meta tags,
+3. microdata (`itemprop="price"`),
+
+and Amazon's own markup, which has none of those for its price. Temu, Amazon
+and Shopify stores work. Some big retailers (IKEA, Walmart, Home Depot, Etsy,
+eBay, and some furniture brands) refuse to answer any server at all, and those
+lookups fail with that reason. The fetcher first identifies itself as
+`SharedListBot`, which gets some shops to serve their product data. If that
+leaves gaps, it asks again as a browser would.
+
+Each link column has its own switch for this, and a choice of which columns it
+fills (`fill` in `update_column`). Lookups are capped per list and per hour.
+
+The fetcher only ever connects to the public internet. The check happens in
+the connection's own DNS lookup and again after every redirect. A link to
+`localhost`, a private network, a cloud metadata address, or a port other than
+80 and 443 is refused. Bodies are cut off at 2.5 MB, and a page gets ten
+seconds.
 
 ## Styling
 
@@ -194,6 +230,9 @@ server/
   app.ts        request context (base path, proxy headers) and dispatch
   api.ts        the JSON API the web client uses
   mcp.ts        the MCP tools
+  lookups.ts    looking links up and filling rows from them
+  extract.ts    a page's name, photo and price, from its HTML
+  fetcher.ts    fetching a page without letting a link reach a private address
   tokens.ts     MCP tokens: made, checked, revoked
   cli.ts        the only place tokens are made
   service.ts    each operation as one transaction

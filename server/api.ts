@@ -211,6 +211,12 @@ export function createApi({ config, service }: ApiDeps) {
       reply(ctx, service.removeItems(id, [item]).row, role);
     }],
 
+    ['POST', new RegExp(`^api/lists/${ID}/items/${SEGMENT}/lookup$`), async (ctx, [id, item]) => {
+      const role = editor(ctx, id);
+      // The page polls for the answer, so nobody's browser waits on someone else's server.
+      reply(ctx, service.lookUp(id, [item]).row, role);
+    }],
+
     ['POST', new RegExp(`^api/lists/${ID}/items/${SEGMENT}/move$`), async (ctx, [id, item]) => {
       const role = editor(ctx, id);
       const { index } = await body(ctx);

@@ -6,6 +6,8 @@ import { createApi } from './api.ts';
 import { startBackups } from './backup.ts';
 import { AppError } from './errors.ts';
 import { send, sendError, type Context } from './http.ts';
+import { Lookups } from './lookups.ts';
+import type { Preview } from './extract.ts';
 import { createMcp } from './mcp.ts';
 import { ListService } from './service.ts';
 import { createStatic } from './static.ts';
@@ -23,9 +25,16 @@ export interface App {
   close(): Promise<void>;
 }
 
-export function createApp(config: Config): App {
+export interface AppOptions {
+  /** Stands in for fetching real pages, in tests. */
+  fetchPreview?: (url: string) => Promise<Preview>;
+}
+
+export function createApp(config: Config, options: AppOptions = {}): App {
   const store = new Store(join(config.dataDir, 'shared-list.db'));
-  const service = new ListService(store, config.limits, config.basePath);
+  const lookups = new Lookups(store, config.limits, options.fetchPreview);
+  const service = new ListService(store, config.limits, config.basePath, lookups);
+  lookups.resume();
   const api = createApi({ config, service });
   const mcp = createMcp({ config, service });
   const web = createStatic(config);

@@ -54,8 +54,8 @@ test('the server describes itself and its tools', async () => {
     tools.map((t) => t.name).sort(),
     [
       'add_columns', 'add_items', 'create_list', 'delete_list', 'get_css', 'get_list', 'get_style_guide',
-      'list_lists', 'move_item', 'open_list', 'remove_column', 'remove_items', 'set_css', 'update_column',
-      'update_items', 'update_list',
+      'list_lists', 'look_up_links', 'move_item', 'open_list', 'preview_link', 'remove_column', 'remove_items',
+      'set_css', 'update_column', 'update_items', 'update_list',
     ],
   );
 });
@@ -168,4 +168,28 @@ test('MCP needs a token made on the server, and a revoked one stops working', as
   assert.equal((await rpc('mcp', { Authorization: `Bearer ${token}` })).status, 200);
   revokeToken(server.app.store, 'Short-lived');
   assert.equal((await rpc('mcp', { Authorization: `Bearer ${token}` })).status, 401);
+});
+
+test('an agent can lay out columns: width, hidden, link fill and the default sort', async () => {
+  const { call } = await agent(server.token('Layout'));
+  await call('create_list', { title: 'Layout', password: 'pass1234', id: 'layout', preset: 'shopping', sort_by: 'Price', sort_dir: 'desc' });
+  assert.deepEqual((await call('get_list', { list_id: 'layout' })).view.sort, { column: 'price', dir: 'desc' });
+
+  await call('add_columns', { list_id: 'layout', columns: [{ name: 'Budget', type: 'currency', width: 'narrow' }] });
+  assert.equal((await call('update_column', { list_id: 'layout', column: 'Notes', hidden: true, width: 'wide' })).column.hidden, true);
+  const filled = await call('update_column', { list_id: 'layout', column: 'Link', fill: { price: 'Budget', title: null } });
+  assert.deepEqual(filled.column.fill, { price: 'budget', title: null });
+  assert.match((await call('update_column', { list_id: 'layout', column: 'Link', fill: { image: 'Notes' } })).error, /image column/);
+  assert.match((await call('update_column', { list_id: 'layout', column: 'Price', lookup: false })).error, /Only link columns/);
+
+  const list = await call('get_list', { list_id: 'layout' });
+  const byId = Object.fromEntries(list.columns.map((c: { id: string }) => [c.id, c]));
+  assert.equal(byId.budget.width, 'narrow');
+  assert.equal(byId.notes.width, 'wide');
+
+  // Removing a column a link fills puts the link back on the obvious one.
+  await call('remove_column', { list_id: 'layout', column: 'Budget' });
+  assert.deepEqual((await call('get_list', { list_id: 'layout' })).columns.find((c: { id: string }) => c.id === 'link').fill, { title: null });
+  await call('update_list', { list_id: 'layout', sort_by: null });
+  assert.equal((await call('get_list', { list_id: 'layout' })).view.sort, null);
 });

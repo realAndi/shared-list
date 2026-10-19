@@ -687,6 +687,24 @@ button.sl-sort:hover,
   text-decoration-color: currentColor;
 }
 
+/* A link whose page is being read for its price and photo. */
+.sl-lookup {
+  margin-left: 0.5rem;
+  font: 0.6875rem var(--sl-font-mono);
+  color: var(--sl-ink-faint);
+  white-space: nowrap;
+}
+
+.sl-lookup[data-state='pending'] {
+  animation: sl-breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes sl-breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+
 .sl-thumb {
   display: block;
   width: 2.75rem;
@@ -1306,6 +1324,55 @@ button.sl-sort:hover,
   white-space: pre-wrap;
 }
 
+.sl-link-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+}
+
+.sl-link-status[data-state='failed'] {
+  color: var(--sl-ink-soft);
+}
+
+.sl-text-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--sl-ink);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.sl-column-look {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+}
+
+.sl-check-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+  font-size: 0.875rem;
+  color: var(--sl-ink-soft);
+  cursor: pointer;
+}
+
+.sl-check-field input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--sl-accent);
+}
+
+.sl-sort-dir {
+  flex: 0 0 13rem;
+}
+
 .sl-danger-zone {
   display: flex;
   align-items: center;
@@ -1360,6 +1427,14 @@ button.sl-sort:hover,
 
   .sl-option-row .sl-tag {
     display: none;
+  }
+
+  .sl-row-inline:has(.sl-sort-dir) {
+    flex-wrap: wrap;
+  }
+
+  .sl-sort-dir {
+    flex-basis: 100%;
   }
 
   .sl-danger-zone {

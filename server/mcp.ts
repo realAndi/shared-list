@@ -18,13 +18,15 @@ import type { ListRow, TokenRow } from './store.ts';
 import { verifyToken } from './tokens.ts';
 import { STYLE_GUIDE } from '../shared/styleguide.ts';
 import { PRESETS } from '../shared/presets.ts';
-import { COLUMN_TYPES, TAG_COLORS, type Role } from '../shared/types.ts';
+import { COLUMN_TYPES, COLUMN_WIDTHS, TAG_COLORS, type Role } from '../shared/types.ts';
 
 const INSTRUCTIONS = `Shared List hosts password-protected lists that people open from a link on a phone or computer, like a small, good-looking spreadsheet.
 
 A list has typed columns and rows (items). Refer to a column by its name or its id; item values are keyed the same way. Each list can also carry its own CSS, which restyles the page everyone sees: call get_style_guide before writing any.
 
 Every list needs a password. When you create one, tell the person its link and password so they can share both. Prefer one add_items call with many rows over many single calls.
+
+Links added to a link column are looked up in the background: the row's empty price, photo and name are filled from the page, and the item's "links" field says how the lookup went. preview_link reads a page without saving anything.
 
 This token sees the lists it created and the ones it has opened. To work on a list someone else made, ask the person for its password and call open_list.`;
 
@@ -44,12 +46,32 @@ const option = z.union([
     from: z.string().optional().describe('Rename: the option label this one replaces. Rows keep their choice under the new label.'),
   }),
 ]);
+// How a column looks and behaves, shared by add_columns and update_column.
+const display = {
+  width: z.enum(COLUMN_WIDTHS).optional().describe('Room the column gets on a wide screen. normal is the default.'),
+  hidden: z.boolean().optional().describe('true leaves the column out of the table and phone layout; it still shows when a row is opened, and keeps its values.'),
+  lookup: z.boolean().optional().describe('url only. Whether a link added here is looked up to fill the row. On by default.'),
+  fill: z
+    .object({
+      price: z.string().nullable().optional().describe('A money or number column, or null to never fill a price.'),
+      image: z.string().nullable().optional().describe('An image column, or null.'),
+      title: z.string().nullable().optional().describe('A text column for the product name, or null.'),
+    })
+    .nullable()
+    .optional()
+    .describe('url only. Which columns a lookup fills, by name or id. Left out, it fills the first money column, the first image column and the row name. null goes back to that.'),
+};
 const column = z.object({
   name: z.string().describe('Header text.'),
   type: z.enum(COLUMN_TYPES).optional().describe(`Defaults to text. ${COLUMN_TYPE_HELP}`),
   options: z.array(option).optional().describe(`select only. Labels, or { value, color } with color one of ${TAG_COLORS.join(', ')}.`),
   currency: z.string().optional().describe('currency only. ISO 4217 code; defaults to USD.'),
+  ...display,
 });
+const sort = {
+  sort_by: z.string().nullable().optional().describe('A column to order rows by for everyone who has not picked their own order, or null for the list order.'),
+  sort_dir: z.enum(['asc', 'desc']).optional().describe('With sort_by. asc unless set.'),
+};
 const listId = z.string().describe('The list id: the last part of its link.');
 
 function ok(data: unknown) {
@@ -141,6 +163,7 @@ function buildServer({ service, token, origin, passwordFailures }: Deps): McpSer
       columns: z.array(column).optional(),
       items: z.array(values).optional().describe('Rows to start with.'),
       group_by: z.string().optional().describe('A select or checkbox column to group rows under.'),
+      ...sort,
       editable: z.boolean().optional().describe('Whether people with the password can edit (default true). false makes it view-only for everyone but this token.'),
       css: z.string().optional().describe('Custom CSS. Read get_style_guide first.'),
     },
@@ -157,6 +180,7 @@ function buildServer({ service, token, origin, passwordFailures }: Deps): McpSer
       title: z.string().optional(),
       description: z.string().optional(),
       group_by: z.string().nullable().optional().describe('A select or checkbox column, or null for no grouping.'),
+      ...sort,
       password: z.string().optional(),
       editable: z.boolean().optional(),
     },
@@ -198,7 +222,7 @@ function buildServer({ service, token, origin, passwordFailures }: Deps): McpSer
 
   server.registerTool('update_column', {
     title: 'Change a column',
-    description: 'Rename, retype, reorder or change the options of a column. Retyping keeps values that still make sense (text "12" becomes the number 12) and empties the rest; the result says how many were emptied. Sending options replaces the whole set.',
+    description: 'Rename, retype, reorder, resize or hide a column, change its options, or set what a link column looks up. Only what you send changes. Retyping keeps values that still make sense (text "12" becomes the number 12) and empties the rest; the result says how many were emptied. Sending options replaces the whole set.',
     inputSchema: {
       list_id: listId,
       column: z.string().describe('Column name or id.'),
@@ -207,6 +231,7 @@ function buildServer({ service, token, origin, passwordFailures }: Deps): McpSer
       options: z.array(option).optional(),
       currency: z.string().optional(),
       position: z.number().int().optional().describe('New index; 0 is first.'),
+      ...display,
     },
   }, ({ list_id, column: key, ...patch }) => run(() => {
     edit(list_id);
@@ -271,6 +296,36 @@ function buildServer({ service, token, origin, passwordFailures }: Deps): McpSer
     edit(list_id);
     const row = service.moveItem(list_id, item_id, index);
     return { ...brief(row), order: row.doc.items.map((i) => i.id) };
+  }));
+
+  server.registerTool('preview_link', {
+    title: 'Look up a link',
+    description: 'Read a shop page and return the product name, photo and price it shows, without saving anything. Works for Temu, Amazon and most shops that publish product data; some big stores block servers outright, and then this says so.',
+    inputSchema: { url: z.string().describe('Any product link, including short and share links.') },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  }, ({ url }) => run(() => service.preview(url)));
+
+  server.registerTool('look_up_links', {
+    title: 'Fill rows from their links',
+    description: 'Look up the links in some rows again (or every row) and fill their empty price, photo and name cells. Links are already looked up when they are added; use this for rows whose lookup failed or to pick up a new photo. Waits up to 25 seconds for the answers.',
+    inputSchema: {
+      list_id: listId,
+      item_ids: z.array(z.string()).optional().describe('Rows to look up. Every row when left out.'),
+    },
+    annotations: { openWorldHint: true },
+  }, ({ list_id, item_ids }) => run(async () => {
+    edit(list_id);
+    const { done } = service.lookUp(list_id, item_ids);
+    await Promise.race([done, new Promise((r) => setTimeout(r, 25_000))]);
+    const row = service.get(list_id);
+    const wanted = item_ids ? new Set(item_ids) : undefined;
+    return {
+      ...brief(row),
+      items: row.doc.items
+        .filter((i) => !wanted || wanted.has(i.id))
+        .filter((i) => i.links)
+        .map((i) => ({ id: i.id, values: i.values, links: i.links })),
+    };
   }));
 
   server.registerTool('get_style_guide', {

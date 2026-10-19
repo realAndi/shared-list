@@ -7,12 +7,15 @@ import type { Limits } from './config.ts';
 import { AppError, invalid } from './errors.ts';
 import {
   COLUMN_TYPES,
+  COLUMN_WIDTHS,
   TAG_COLORS,
   type CellValue,
   type Column,
   type ColumnInput,
   type ColumnType,
+  type ColumnWidth,
   type Item,
+  type LinkFill,
   type ListView,
   type SelectOption,
   type TagColor,
@@ -203,10 +206,92 @@ export function addColumn(doc: ListDoc, input: ColumnInput, limits: Limits, posi
   if (type === 'select') column.options = parseOptions(input.options, limits).options;
   if (type === 'currency') column.currency = currencyCode(input.currency);
   doc.columns.splice(clampIndex(position, doc.columns.length), 0, column);
+  // `fill` names other columns, which may not exist yet; the caller applies it after.
+  applyDisplay(doc, column, { width: input.width, hidden: input.hidden, lookup: input.lookup });
   return column;
 }
 
-export interface ColumnPatch {
+function columnWidth(raw: unknown): ColumnWidth | undefined {
+  if (raw === null || raw === 'normal') return undefined;
+  if (typeof raw === 'string' && (COLUMN_WIDTHS as readonly string[]).includes(raw)) return raw as ColumnWidth;
+  throw invalid(`Unknown width "${String(raw)}". Use narrow, normal or wide.`);
+}
+
+/** Which column types a lookup can put each thing it finds into. */
+const FILL_TYPES: Record<keyof LinkFill, ColumnType[]> = {
+  price: ['currency', 'number'],
+  image: ['image'],
+  title: ['text'],
+};
+
+function linkFill(doc: ListDoc, raw: unknown): LinkFill | undefined {
+  if (raw === null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw invalid('fill is an object like { price, image, title }.');
+  const fill: LinkFill = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(key in FILL_TYPES)) throw invalid(`fill can set price, image and title, not "${key}".`);
+    const slot = key as keyof LinkFill;
+    if (value === null || value === '') {
+      fill[slot] = null;
+      continue;
+    }
+    if (typeof value !== 'string') throw invalid(`fill.${slot} is a column name, or null to fill nothing.`);
+    const target = requireColumn(doc.columns, value);
+    if (!FILL_TYPES[slot].includes(target.type)) {
+      throw invalid(`fill.${slot} has to be a ${FILL_TYPES[slot].join(' or ')} column; "${target.name}" is ${target.type}.`);
+    }
+    fill[slot] = target.id;
+  }
+  return fill;
+}
+
+interface DisplayPatch {
+  width?: unknown;
+  hidden?: unknown;
+  lookup?: unknown;
+  fill?: unknown;
+}
+
+function applyDisplay(doc: ListDoc, column: Column, patch: DisplayPatch): void {
+  if (patch.width !== undefined) {
+    const width = columnWidth(patch.width);
+    if (width) column.width = width;
+    else delete column.width;
+  }
+  if (patch.hidden !== undefined) {
+    if (patch.hidden) column.hidden = true;
+    else delete column.hidden;
+  }
+  if (patch.lookup !== undefined || patch.fill !== undefined) {
+    if (column.type !== 'url') throw invalid(`Only link columns look pages up; "${column.name}" is ${column.type}.`);
+  }
+  if (patch.lookup !== undefined) {
+    if (patch.lookup === false) column.lookup = false;
+    else delete column.lookup;
+  }
+  if (patch.fill !== undefined) {
+    const fill = linkFill(doc, patch.fill);
+    if (fill && Object.keys(fill).length) column.fill = fill;
+    else delete column.fill;
+  }
+}
+
+/** The columns a lookup of a link in `column` fills: its own choices, else the obvious ones. */
+export function fillTargets(doc: ListDoc, column: Column): { price?: Column; image?: Column; title?: Column } {
+  const pick = (slot: keyof LinkFill, fallback: () => Column | undefined) => {
+    const chosen = column.fill?.[slot];
+    if (chosen === null) return undefined;
+    if (chosen) return doc.columns.find((c) => c.id === chosen);
+    return fallback();
+  };
+  return {
+    price: pick('price', () => doc.columns.find((c) => c.type === 'currency')),
+    image: pick('image', () => doc.columns.find((c) => c.type === 'image')),
+    title: pick('title', () => doc.columns.find((c) => c.type === 'text')),
+  };
+}
+
+export interface ColumnPatch extends DisplayPatch {
   name?: string;
   type?: ColumnType;
   options?: (string | OptionInput)[];
@@ -233,6 +318,11 @@ export function updateColumn(doc: ListDoc, key: string, patch: ColumnPatch, limi
     column.type = type;
     if (type !== 'select') delete column.options;
     if (type !== 'currency') delete column.currency;
+    if (type !== 'url') {
+      delete column.lookup;
+      delete column.fill;
+      for (const item of doc.items) delete item.links?.[column.id];
+    }
     if (type === 'select') column.options = [];
     if (type === 'currency') column.currency = 'USD';
     if (doc.view.group_by === column.id && type !== 'select' && type !== 'checkbox') doc.view.group_by = null;
@@ -264,6 +354,8 @@ export function updateColumn(doc: ListDoc, key: string, patch: ColumnPatch, limi
     }
   }
 
+  applyDisplay(doc, column, patch);
+
   if (patch.position !== undefined) {
     const from = doc.columns.indexOf(column);
     doc.columns.splice(from, 1);
@@ -276,9 +368,30 @@ export function updateColumn(doc: ListDoc, key: string, patch: ColumnPatch, limi
 export function removeColumn(doc: ListDoc, key: string): Column {
   const column = requireColumn(doc.columns, key);
   doc.columns = doc.columns.filter((c) => c !== column);
-  for (const item of doc.items) delete item.values[column.id];
+  for (const item of doc.items) {
+    delete item.values[column.id];
+    delete item.links?.[column.id];
+  }
   if (doc.view.group_by === column.id) doc.view.group_by = null;
+  if (doc.view.sort?.column === column.id) doc.view.sort = null;
+  // A link column that filled this one goes back to filling the obvious one.
+  for (const other of doc.columns) {
+    if (!other.fill) continue;
+    for (const slot of Object.keys(other.fill) as (keyof LinkFill)[]) {
+      if (other.fill[slot] === column.id) delete other.fill[slot];
+    }
+    if (!Object.keys(other.fill).length) delete other.fill;
+  }
   return column;
+}
+
+export function setSort(doc: ListDoc, key: string | null, dir: unknown = 'asc'): void {
+  if (key === null || key === '') {
+    doc.view.sort = null;
+    return;
+  }
+  if (dir !== 'asc' && dir !== 'desc') throw invalid('A sort direction is asc or desc.');
+  doc.view.sort = { column: requireColumn(doc.columns, key).id, dir };
 }
 
 export function setGroupBy(doc: ListDoc, key: string | null): void {

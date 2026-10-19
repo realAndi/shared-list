@@ -24,6 +24,8 @@ services:
       # SESSION_SECRET is generated into /data on first start if you don't set it.
     volumes:
       - ./data:/data
+    # It needs outbound internet only to look links up. A pasted link can never
+    # make it reach a private address; see "Link lookups" in the README.
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]

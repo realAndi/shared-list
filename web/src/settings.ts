@@ -55,6 +55,19 @@ function detailsTab(host: SettingsHost): HTMLElement {
     h('option', { value: '' }, 'Don’t group'),
     groupable.map((c) => h('option', { value: c.id, selected: list.view.group_by === c.id }, c.name)),
   );
+  const sortable = list.columns.filter((c) => c.type !== 'image');
+  const sortBy = h(
+    'select',
+    { class: 'sl-input', id: 'sl-set-sort' },
+    h('option', { value: '' }, 'The order rows were added'),
+    sortable.map((c) => h('option', { value: c.id, selected: list.view.sort?.column === c.id }, c.name)),
+  );
+  const sortDir = h(
+    'select',
+    { class: 'sl-input sl-sort-dir', 'aria-label': 'Sort direction' },
+    h('option', { value: 'asc', selected: list.view.sort?.dir !== 'desc' }, 'A → Z, low → high'),
+    h('option', { value: 'desc', selected: list.view.sort?.dir === 'desc' }, 'Z → A, high → low'),
+  );
   const form = h(
     'form',
     { class: 'sl-form' },
@@ -67,12 +80,25 @@ function detailsTab(host: SettingsHost): HTMLElement {
       group,
       groupable.length ? null : h('p', { class: 'sl-hint' }, 'Add a Choice or Checkbox column to group rows by it.'),
     ),
+    h(
+      'div',
+      { class: 'sl-field' },
+      h('label', { class: 'sl-label', for: 'sl-set-sort' }, 'Sort rows by'),
+      h('div', { class: 'sl-row-inline' }, sortBy, sortDir),
+      h('p', { class: 'sl-hint' }, 'Everyone sees this order until they click a column heading to pick their own.'),
+    ),
     h('div', { class: 'sl-dialog-actions' }, h('span', { class: 'sl-spacer' }), h('button', { type: 'submit', class: 'sl-button sl-button--primary' }, 'Save details')),
   );
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     void attempt(async () => {
-      const res = await api.update(list.id, { title: title.value, description: description.value, group_by: group.value || null });
+      const res = await api.update(list.id, {
+        title: title.value,
+        description: description.value,
+        group_by: group.value || null,
+        sort_by: sortBy.value || null,
+        sort_dir: sortDir.value,
+      });
       host.apply(res!.list);
     }, 'Details saved');
   });
@@ -204,6 +230,7 @@ function columnsTab(host: SettingsHost): HTMLElement {
                 return h('label', { class: 'sl-inline-field' }, 'Currency', currency);
               })()
             : null,
+          columnLook(host, column, render),
         ),
       );
     });
@@ -355,4 +382,39 @@ export function openSettings(host: SettingsHost): void {
     className: 'sl-dialog--settings',
     onClose: () => host.preview(null),
   });
+}
+
+/** Width, hiding, and for link columns whether to look pages up. */
+function columnLook(host: SettingsHost, column: Column, rerender: () => void): HTMLElement {
+  const list = host.list();
+  const save = (patch: Record<string, unknown>, done?: string) =>
+    void attempt(async () => {
+      host.apply((await api.updateColumn(list.id, column.id, patch))!.list);
+      rerender();
+    }, done);
+
+  const width = h(
+    'select',
+    { class: 'sl-input sl-input--small', 'aria-label': `Width of ${column.name}` },
+    (['narrow', 'normal', 'wide'] as const).map((w) =>
+      h('option', { value: w, selected: (column.width ?? 'normal') === w }, w[0].toUpperCase() + w.slice(1)),
+    ),
+  );
+  width.addEventListener('change', () => save({ width: width.value }));
+
+  const hidden = h('input', { type: 'checkbox', checked: Boolean(column.hidden) });
+  hidden.addEventListener('change', () => save({ hidden: hidden.checked }, hidden.checked ? `${column.name} is hidden from the table` : undefined));
+
+  let lookup: HTMLElement | null = null;
+  if (column.type === 'url') {
+    const box = h('input', { type: 'checkbox', checked: column.lookup !== false });
+    box.addEventListener('change', () => save({ lookup: box.checked }));
+    lookup = h('label', { class: 'sl-check-field' }, box, 'Fill in price, photo and name from the link');
+  }
+
+  return h('div', { class: 'sl-column-look' },
+    h('label', { class: 'sl-inline-field' }, 'Width', width),
+    h('label', { class: 'sl-check-field' }, hidden, 'Hide from the table'),
+    lookup,
+  );
 }

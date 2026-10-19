@@ -41,14 +41,50 @@ export interface Column {
   options?: SelectOption[];
   /** `currency` only. ISO 4217 code. */
   currency?: string;
+  /** How much room the column gets on a wide screen. Unset is normal. */
+  width?: ColumnWidth;
+  /** Left out of the table and the phone layout, but still in each row's form. */
+  hidden?: boolean;
+  /** `url` only. Look the page up when a link is added. Unset means on. */
+  lookup?: boolean;
+  /**
+   * `url` only. Which columns a lookup fills, by id. Unset picks the first
+   * money column, the first image column and the row's name; null fills nothing.
+   */
+  fill?: LinkFill;
+}
+
+export const COLUMN_WIDTHS = ['narrow', 'normal', 'wide'] as const;
+export type ColumnWidth = (typeof COLUMN_WIDTHS)[number];
+
+export interface LinkFill {
+  price?: string | null;
+  image?: string | null;
+  title?: string | null;
 }
 
 export type CellValue = string | number | boolean | null;
+
+/** What a lookup found on a linked page, kept with the row. */
+export interface LinkInfo {
+  url: string;
+  status: 'pending' | 'done' | 'failed';
+  checked_at: string;
+  site?: string;
+  title?: string;
+  image?: string;
+  price?: number;
+  currency?: string;
+  /** Why a lookup failed, in words a person can act on. */
+  error?: string;
+}
 
 export interface Item {
   id: string;
   /** Keyed by column id. A missing key and `null` both mean empty. */
   values: Record<string, CellValue>;
+  /** Keyed by the id of a `url` column: the last lookup of the link in it. */
+  links?: Record<string, LinkInfo>;
   created_at: string;
   updated_at: string;
 }
@@ -56,6 +92,8 @@ export interface Item {
 export interface ListView {
   /** A `select` or `checkbox` column to group rows under. */
   group_by: string | null;
+  /** The order rows are shown in until someone picks their own. Unset is the list's own order. */
+  sort?: { column: string; dir: 'asc' | 'desc' } | null;
 }
 
 /** `owner` is only ever an MCP token that created the list; people in a browser are editors or viewers. */
@@ -95,4 +133,8 @@ export interface ColumnInput {
   type?: ColumnType;
   options?: (string | { value: string; color?: TagColor })[];
   currency?: string;
+  width?: ColumnWidth;
+  hidden?: boolean;
+  lookup?: boolean;
+  fill?: LinkFill;
 }

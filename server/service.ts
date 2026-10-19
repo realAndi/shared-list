@@ -14,6 +14,7 @@ import {
   removeColumn,
   removeItems,
   setGroupBy,
+  setSort,
   updateColumn,
   updateItem,
   validateCss,
@@ -23,9 +24,12 @@ import {
   validateTitle,
   type ColumnPatch,
 } from './model.ts';
+import type { Job, Lookups } from './lookups.ts';
+import type { Preview } from './extract.ts';
+import type { ListDoc } from './model.ts';
 import type { ListRow, Store } from './store.ts';
 import { PRESETS } from '../shared/presets.ts';
-import type { Column, ColumnInput, Item, ListPayload, ListSummary, Role } from '../shared/types.ts';
+import type { CellValue, Column, ColumnInput, Item, ListPayload, ListSummary, Role } from '../shared/types.ts';
 
 export interface CreateListInput {
   title?: unknown;
@@ -38,12 +42,17 @@ export interface CreateListInput {
   items?: unknown;
   css?: unknown;
   group_by?: unknown;
+  sort_by?: unknown;
+  sort_dir?: unknown;
 }
 
 export interface ListPatch {
   title?: unknown;
   description?: unknown;
   group_by?: unknown;
+  /** A column to sort rows by when nobody has picked their own, or null for the list's own order. */
+  sort_by?: unknown;
+  sort_dir?: unknown;
 }
 
 export interface AccessPatch {
@@ -55,12 +64,14 @@ export interface AccessPatch {
 export class ListService {
   readonly store: Store;
   readonly limits: Limits;
+  readonly lookups: Lookups;
   private readonly basePath: string;
 
-  constructor(store: Store, limits: Limits, basePath: string) {
+  constructor(store: Store, limits: Limits, basePath: string, lookups: Lookups) {
     this.store = store;
     this.limits = limits;
     this.basePath = basePath;
+    this.lookups = lookups;
   }
 
   /** The link people open, e.g. https://example.com/shared-list/abc. */
@@ -143,13 +154,15 @@ export class ListService {
       if (!PRESETS[preset]) throw invalid(`Unknown preset "${preset}". Use one of: ${Object.keys(PRESETS).join(', ')}.`);
       columns = PRESETS[preset].columns;
     }
-    for (const column of columns) addColumn(doc, column, this.limits);
+    addColumnsTo(doc, columns, this.limits);
 
+    let jobs: Job[] = [];
     if (input.items !== undefined && input.items !== null) {
       if (!Array.isArray(input.items)) throw invalid('Items must be a list of objects.');
-      if (input.items.length) addItems(doc, input.items, this.limits);
+      if (input.items.length) jobs = markLookups(id, doc, addItems(doc, input.items, this.limits), new Map());
     }
     if (typeof input.group_by === 'string' && input.group_by) setGroupBy(doc, input.group_by);
+    if (typeof input.sort_by === 'string' && input.sort_by) setSort(doc, input.sort_by, input.sort_dir ?? 'asc');
 
     const stamp = new Date().toISOString();
     const row: ListRow = {
@@ -171,6 +184,7 @@ export class ListService {
     } catch {
       throw new AppError('conflict', `A list with id "${id}" already exists.`);
     }
+    void this.lookups.enqueue(jobs);
     return row;
   }
 
@@ -187,6 +201,10 @@ export class ListService {
       if (patch.group_by !== undefined) {
         if (patch.group_by !== null && typeof patch.group_by !== 'string') throw invalid('group_by is a column or null.');
         setGroupBy(row.doc, patch.group_by);
+      }
+      if (patch.sort_by !== undefined) {
+        if (patch.sort_by !== null && typeof patch.sort_by !== 'string') throw invalid('sort_by is a column or null.');
+        setSort(row.doc, patch.sort_by, patch.sort_dir ?? 'asc');
       }
     }).row;
   }
@@ -211,9 +229,7 @@ export class ListService {
 
   addColumns(id: string, inputs: unknown, position?: number): { row: ListRow; result: Column[] } {
     if (!Array.isArray(inputs) || inputs.length === 0) throw invalid('Send at least one column.');
-    return this.change(id, (row) =>
-      inputs.map((input, i) => addColumn(row.doc, input as ColumnInput, this.limits, position === undefined ? undefined : position + i)),
-    );
+    return this.change(id, (row) => addColumnsTo(row.doc, inputs as ColumnInput[], this.limits, position));
   }
 
   updateColumn(id: string, key: string, patch: ColumnPatch): { row: ListRow; result: { column: Column; cleared: number } } {
@@ -229,16 +245,47 @@ export class ListService {
 
   addItems(id: string, inputs: unknown, position?: number): { row: ListRow; result: Item[] } {
     this.checkStorage();
-    return this.change(id, (row) => addItems(row.doc, inputs as unknown[], this.limits, position));
+    const { row, result } = this.change(id, (row) => {
+      const items = addItems(row.doc, inputs as unknown[], this.limits, position);
+      return { items, jobs: markLookups(id, row.doc, items, new Map()) };
+    });
+    void this.lookups.enqueue(result.jobs);
+    return { row, result: result.items };
   }
 
   updateItems(id: string, updates: unknown): { row: ListRow; result: Item[] } {
     if (!Array.isArray(updates) || updates.length === 0) throw invalid('Send at least one update.');
-    return this.change(id, (row) =>
-      updates.map((u: { item_id?: unknown; id?: unknown; values?: unknown }) =>
+    const { row, result } = this.change(id, (row) => {
+      const before = new Map(row.doc.items.map((i) => [i.id, { ...i.values }]));
+      const items = updates.map((u: { item_id?: unknown; id?: unknown; values?: unknown }) =>
         updateItem(row.doc, u?.item_id ?? u?.id, u?.values, this.limits),
-      ),
-    );
+      );
+      return { items, jobs: markLookups(id, row.doc, items, before) };
+    });
+    void this.lookups.enqueue(result.jobs);
+    return { row, result: result.items };
+  }
+
+  /**
+   * Look the links in some rows (all of them if `itemIds` is left out) up again.
+   * `row` shows them pending; `done` settles when the answers are in. Only empty
+   * cells are filled, so a value someone corrected stays corrected.
+   */
+  lookUp(id: string, itemIds?: unknown): { row: ListRow; done: Promise<void> } {
+    if (itemIds !== undefined && !Array.isArray(itemIds)) throw invalid('item_ids is a list of item ids.');
+    const { row, result: jobs } = this.change(id, (row) => {
+      const wanted = itemIds ? new Set((itemIds as unknown[]).map(String)) : undefined;
+      const items = row.doc.items.filter((i) => !wanted || wanted.has(i.id));
+      if (wanted && items.length !== wanted.size) throw new AppError('not_found', 'Some of those item ids are not in this list.');
+      return markLookups(id, row.doc, items, new Map(), true);
+    });
+    return { row, done: this.lookups.enqueue(jobs) };
+  }
+
+  preview(url: unknown): Promise<Preview> {
+    if (typeof url !== 'string' || !url.trim()) throw invalid('Send a link to look up.');
+    const value = /^[a-z][a-z0-9+.-]*:/i.test(url.trim()) ? url.trim() : `https://${url.trim()}`;
+    return this.lookups.preview(value);
   }
 
   removeItems(id: string, itemIds: unknown): { row: ListRow; result: string[] } {
@@ -252,4 +299,44 @@ export class ListService {
   delete(id: string): void {
     if (!this.store.delete(id)) throw new AppError('not_found', `No list with id "${id}".`);
   }
+}
+
+/**
+ * Adds columns in two passes, because a link column's `fill` may name a column
+ * that comes later in the same batch.
+ */
+function addColumnsTo(doc: ListDoc, inputs: ColumnInput[], limits: Limits, position?: number): Column[] {
+  if (!Array.isArray(inputs)) throw invalid('Columns must be a list.');
+  const added = inputs.map((input, i) => {
+    const { fill: _fill, ...rest } = (input ?? {}) as ColumnInput;
+    return addColumn(doc, rest as ColumnInput, limits, position === undefined ? undefined : position + i);
+  });
+  inputs.forEach((input, i) => {
+    if (input?.fill !== undefined) updateColumn(doc, added[i].id, { fill: input.fill }, limits);
+  });
+  return added;
+}
+
+/**
+ * Marks the links that are new in these rows as pending and returns the
+ * lookups to run once the change is saved. `force` looks every link up again.
+ */
+function markLookups(list: string, doc: ListDoc, items: Item[], before: Map<string, Record<string, CellValue>>, force = false): Job[] {
+  const jobs: Job[] = [];
+  const columns = doc.columns.filter((c) => c.type === 'url' && c.lookup !== false);
+  const stamp = new Date().toISOString();
+  for (const item of items) {
+    for (const column of columns) {
+      const url = item.values[column.id];
+      if (typeof url !== 'string') {
+        if (item.links) delete item.links[column.id];
+        continue;
+      }
+      if (!force && before.get(item.id)?.[column.id] === url) continue;
+      (item.links ??= {})[column.id] = { url, status: 'pending', checked_at: stamp };
+      jobs.push({ list, item: item.id, column: column.id, url });
+    }
+    if (item.links && !Object.keys(item.links).length) delete item.links;
+  }
+  return jobs;
 }

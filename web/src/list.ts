@@ -14,17 +14,30 @@ import { openSettings } from './settings.ts';
 import type { CellValue, Column, Item, ListPayload } from '../../shared/types.ts';
 
 const POLL_MS = 8000;
+/** While a link is being looked up, its answer is worth fetching sooner. */
+const POLL_PENDING_MS = 2000;
 
-const TRACKS: Record<string, string> = {
-  checkbox: '3.25rem',
-  text: 'minmax(10rem, 2fr)',
-  number: 'minmax(6rem, 0.8fr)',
-  currency: 'minmax(7rem, 0.9fr)',
-  url: 'minmax(8rem, 1.1fr)',
-  image: '4.75rem',
-  select: 'minmax(8rem, 1fr)',
-  date: 'minmax(7.5rem, 0.9fr)',
+/** A column's track: [minimum rem, share of the spare room]. A share of 0 is a fixed width. */
+const TRACKS: Record<string, [number, number]> = {
+  checkbox: [3.25, 0],
+  text: [10, 2],
+  number: [6, 0.8],
+  currency: [7, 0.9],
+  url: [8, 1.1],
+  image: [4.75, 0],
+  select: [8, 1],
+  date: [7.5, 0.9],
 };
+
+function track(column: Column): string {
+  const [min, share] = TRACKS[column.type];
+  const scale = column.width === 'narrow' ? 0.6 : column.width === 'wide' ? 1.6 : 1;
+  const rem = Math.round(min * (share ? scale : Math.sqrt(scale)) * 100) / 100;
+  return share ? `minmax(${rem}rem, ${share * scale}fr)` : `${rem}rem`;
+}
+
+/** Text that is a link and nothing else, the way people paste one. */
+const LINK = /^(https?:\/\/\S+|www\.\S+\.\S+|[\w-]+(\.[\w-]+)+\/\S*)$/i;
 
 /** Inline cell editing is for a mouse and a wide screen; touch opens the full form. */
 const inlineEditing = matchMedia('(hover: hover) and (pointer: fine) and (min-width: 720px)');
@@ -47,8 +60,13 @@ export function mountList(root: HTMLElement, id: string): void {
   }
 
   const canEdit = () => list.role !== 'viewer';
+  const shown = () => list.columns.filter((c) => !c.hidden);
   const checkColumn = () => list.columns.find((c) => c.type === 'checkbox');
-  const primaryColumn = () => list.columns.find((c) => c.type === 'text') ?? list.columns.find((c) => c.type !== 'checkbox' && c.type !== 'image');
+  const primaryColumn = () => shown().find((c) => c.type === 'text') ?? shown().find((c) => c.type !== 'checkbox' && c.type !== 'image');
+  const lookingUp = () => list.items.some((i) => Object.values(i.links ?? {}).some((l) => l.status === 'pending'));
+  /** Someone's own choice of order wins; otherwise the list's default. */
+  const effectiveSort = (): Sort =>
+    sort ?? (list.view.sort ? { column: list.view.sort.column, dir: list.view.sort.dir === 'desc' ? -1 : 1 } : null);
 
   // --- custom CSS ---------------------------------------------------------
 
@@ -104,9 +122,12 @@ export function mountList(root: HTMLElement, id: string): void {
       incoming = next;
       return;
     }
+    const wasLookingUp = list && lookingUp();
     list = next;
     incoming = null;
     render();
+    // A new lookup should not wait out the slow poll.
+    if (!wasLookingUp && lookingUp()) startPolling();
   }
 
   async function mutate(work: () => Promise<{ list: ListPayload } | undefined>, done?: string): Promise<void> {
@@ -133,14 +154,17 @@ export function mountList(root: HTMLElement, id: string): void {
   }
 
   function startPolling(): void {
-    window.clearInterval(poller);
-    poller = window.setInterval(poll, POLL_MS);
+    window.clearTimeout(poller);
+    poller = window.setTimeout(async () => {
+      await poll();
+      startPolling();
+    }, list && lookingUp() ? POLL_PENDING_MS : POLL_MS);
   }
 
   document.addEventListener('visibilitychange', () => void poll());
 
   function locked(): void {
-    window.clearInterval(poller);
+    window.clearTimeout(poller);
     cssLink()?.remove();
     renderLock(root, id, (opened) => {
       list = opened;
@@ -173,9 +197,10 @@ export function mountList(root: HTMLElement, id: string): void {
     let items = list.items;
     const q = query.trim().toLowerCase();
     if (q) items = items.filter((item) => list.columns.some((c) => plain(c, item.values[c.id]).toLowerCase().includes(q)));
-    const column = sort && list.columns.find((c) => c.id === sort!.column);
+    const order = effectiveSort();
+    const column = order && list.columns.find((c) => c.id === order.column);
     if (column) {
-      const dir = sort!.dir;
+      const dir = order!.dir;
       // Empty cells stay at the bottom in both directions.
       items = [...items].sort((a, b) => {
         const av = a.values[column.id];
@@ -282,7 +307,7 @@ export function mountList(root: HTMLElement, id: string): void {
 
   /** After Tab, open the next editable cell along the row. */
   function focusCell(itemId: string, columnId: string, step: number): void {
-    const editable = list.columns.filter((c) => c.type !== 'checkbox');
+    const editable = shown().filter((c) => c.type !== 'checkbox');
     const next = editable[editable.findIndex((c) => c.id === columnId) + step];
     const item = list.items.find((i) => i.id === itemId);
     const cell = next && root.querySelector<HTMLElement>(`.sl-row[data-item="${itemId}"] .sl-cell[data-col="${next.id}"]`);
@@ -299,6 +324,7 @@ export function mountList(root: HTMLElement, id: string): void {
           ? mutate(() => api.updateItem(list.id, item.id, values))
           : mutate(() => api.addItem(list.id, values), 'Item added'),
       onDelete: item ? () => mutate(() => api.removeItem(list.id, item.id), 'Item deleted') : undefined,
+      onLookup: item ? () => mutate(() => api.lookup(list.id, item.id), 'Looking it up again') : undefined,
     });
   }
 
@@ -323,12 +349,15 @@ export function mountList(root: HTMLElement, id: string): void {
       role: 'row',
       data: { item: item.id, done: Boolean(check && item.values[check.id]) },
     });
+    // Choices on hidden columns still label the row; only their cells are left out.
     for (const column of list.columns) {
       const value = item.values[column.id];
-      // Every choice and checkbox is on the row too, so CSS can style a whole row by it.
       if ((column.type === 'select' || column.type === 'checkbox') && value !== undefined && value !== null) {
         el.setAttribute(`data-col-${column.id}`, String(value));
       }
+    }
+    for (const column of shown()) {
+      const value = item.values[column.id];
       const cell = h('div', {
         class: 'sl-cell',
         role: 'cell',
@@ -338,12 +367,20 @@ export function mountList(root: HTMLElement, id: string): void {
           label: column.name,
           primary: column === primary,
           empty: value === undefined || value === null || value === '',
+          width: column.width,
+          lookup: item.links?.[column.id]?.status,
         },
       });
       if (column.type === 'checkbox') {
         cell.append(checkbox(Boolean(value), `${column.name}: ${primaryText(item)}`, canEdit() ? () => toggle(item, column) : undefined));
       } else {
         cell.append(display(column, value, cents.get(column.id) ?? false) ?? h('span', { class: 'sl-blank' }, '—'));
+        const lookup = item.links?.[column.id];
+        if (lookup?.status === 'pending') {
+          cell.append(h('span', { class: 'sl-lookup', role: 'status', data: { state: 'pending' } }, 'Looking up…'));
+        } else if (lookup?.status === 'failed' && canEdit()) {
+          cell.append(h('span', { class: 'sl-lookup', data: { state: 'failed' }, title: lookup.error ?? '' }, 'No price found'));
+        }
         if (canEdit()) {
           cell.addEventListener('click', (event) => {
             if (!inlineEditing.matches) return;
@@ -383,26 +420,28 @@ export function mountList(root: HTMLElement, id: string): void {
 
   function header(): HTMLElement {
     const head = h('div', { class: 'sl-head', role: 'row' });
-    for (const column of list.columns) {
-      const active = sort?.column === column.id;
+    const order = effectiveSort();
+    for (const column of shown()) {
+      const active = order?.column === column.id;
       const button = h('button', {
         type: 'button',
         class: 'sl-sort',
         'aria-label': `Sort by ${column.name}`,
         on: {
           click: () => {
-            sort = !active ? { column: column.id, dir: 1 } : sort!.dir === 1 ? { column: column.id, dir: -1 } : null;
+            // Ascending, descending, then back to the list's own order.
+            sort = !active ? { column: column.id, dir: 1 } : order!.dir === 1 ? { column: column.id, dir: -1 } : null;
             storage.set(sortKey, sort ? JSON.stringify(sort) : null);
             render();
           },
         },
-      }, h('span', {}, column.name), active ? icon(sort!.dir === 1 ? 'up' : 'down', 12) : null);
+      }, h('span', {}, column.name), active ? icon(order!.dir === 1 ? 'up' : 'down', 12) : null);
       head.append(
         h('div', {
           class: 'sl-th',
           role: 'columnheader',
-          'aria-sort': active ? (sort!.dir === 1 ? 'ascending' : 'descending') : 'none',
-          data: { col: column.id, type: column.type },
+          'aria-sort': active ? (order!.dir === 1 ? 'ascending' : 'descending') : 'none',
+          data: { col: column.id, type: column.type, width: column.width },
         }, column.type === 'checkbox' ? h('span', { class: 'sl-visually-hidden' }, column.name) : button),
       );
     }
@@ -411,11 +450,11 @@ export function mountList(root: HTMLElement, id: string): void {
   }
 
   function footer(items: Item[], cents: Map<string, boolean>): HTMLElement | null {
-    const summed = list.columns.filter((c) => c.type === 'number' || c.type === 'currency' || c.type === 'checkbox');
+    const summed = shown().filter((c) => c.type === 'number' || c.type === 'currency' || c.type === 'checkbox');
     if (!summed.length || !items.length) return null;
     const primary = primaryColumn();
     const foot = h('div', { class: 'sl-foot', role: 'row' });
-    for (const column of list.columns) {
+    for (const column of shown()) {
       let content: Node | string | null = null;
       if (column === primary) content = query ? `Total of ${items.length} shown` : 'Total';
       if (column.type === 'number') content = h('span', { class: 'sl-num' }, String(Number(sum(column, items).toFixed(4))));
@@ -430,13 +469,20 @@ export function mountList(root: HTMLElement, id: string): void {
   function quickAdd(): HTMLElement | null {
     const primary = primaryColumn();
     if (!canEdit() || !primary) return null;
-    const input = h('input', { class: 'sl-cell-input', placeholder: `Add ${primary.name.toLowerCase()}…`, 'aria-label': `Add an item by ${primary.name}` });
+    const linkColumn = list.columns.find((c) => c.type === 'url' && c.lookup !== false);
+    const input = h('input', {
+      class: 'sl-cell-input',
+      placeholder: linkColumn ? `Add ${primary.name.toLowerCase()}, or paste a link…` : `Add ${primary.name.toLowerCase()}…`,
+      'aria-label': `Add an item by ${primary.name}`,
+    });
     input.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' || !input.value.trim()) return;
       event.preventDefault();
       const value = input.value.trim();
       input.value = '';
-      void mutate(() => api.addItem(list.id, { [primary.id]: value })).then(() => {
+      // A pasted link becomes the row's link, and the lookup names it.
+      const values = linkColumn && LINK.test(value) ? { [linkColumn.id]: value } : { [primary.id]: value };
+      void mutate(() => api.addItem(list.id, values)).then(() => {
         root.querySelector<HTMLInputElement>('.sl-quick-add input')?.focus();
       });
     });
@@ -444,7 +490,7 @@ export function mountList(root: HTMLElement, id: string): void {
       class: 'sl-quick-add',
       role: 'row',
       on: { submit: (event: SubmitEvent) => event.preventDefault() },
-    }, list.columns.map((c) => h('div', { class: 'sl-cell', data: { col: c.id, primary: c === primary } }, c === primary ? h('span', { class: 'sl-quick-add-field' }, icon('plus', 16), input) : null)), h('div', { class: 'sl-cell sl-cell--actions' }));
+    }, shown().map((c) => h('div', { class: 'sl-cell', data: { col: c.id, primary: c === primary } }, c === primary ? h('span', { class: 'sl-quick-add-field' }, icon('plus', 16), input) : null)), h('div', { class: 'sl-cell sl-cell--actions' }));
   }
 
   function tally(): HTMLElement | null {
@@ -521,7 +567,7 @@ export function mountList(root: HTMLElement, id: string): void {
     });
 
     const table = h('div', { class: 'sl-table', role: 'table', 'aria-label': list.title });
-    table.style.setProperty('--sl-columns', [...list.columns.map((c) => TRACKS[c.type]), '2.75rem'].join(' '));
+    table.style.setProperty('--sl-columns', [...shown().map(track), '2.75rem'].join(' '));
     table.append(header());
     const body = h('div', { class: 'sl-body', role: 'rowgroup' });
     for (const group of groups(items)) {

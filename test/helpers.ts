@@ -5,6 +5,8 @@ import type { AddressInfo } from 'node:net';
 import { createApp, type App } from '../server/app.ts';
 import { loadConfig, type Config } from '../server/config.ts';
 import { createToken } from '../server/tokens.ts';
+import { FetchError } from '../server/fetcher.ts';
+import type { Preview } from '../server/extract.ts';
 
 export interface Running {
   app: App;
@@ -15,7 +17,15 @@ export interface Running {
   stop(): Promise<void>;
 }
 
-export async function start(env: Record<string, string> = {}): Promise<Running> {
+/** Tests never fetch real pages; a test that wants lookups passes its own pages. */
+const offline = async (): Promise<Preview> => {
+  throw new FetchError('Tests do not fetch pages.');
+};
+
+export async function start(
+  env: Record<string, string> = {},
+  fetchPreview: (url: string) => Promise<Preview> = offline,
+): Promise<Running> {
   const dataDir = mkdtempSync(join(tmpdir(), 'shared-list-test-'));
   const config = loadConfig({
     DATA_DIR: dataDir,
@@ -24,7 +34,7 @@ export async function start(env: Record<string, string> = {}): Promise<Running> 
     WEB_DIR: join(dataDir, 'no-web'),
     ...env,
   });
-  const app = createApp(config);
+  const app = createApp(config, { fetchPreview });
   await new Promise<void>((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   const { port } = app.server.address() as AddressInfo;
   return {

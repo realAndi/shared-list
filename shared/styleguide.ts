@@ -64,6 +64,8 @@ your own there too, or set colors once on :root to use them in both modes.
 
 Inside cells
   .sl-text   .sl-num   .sl-date   .sl-blank (the dash in an empty cell)
+  .sl-lookup[data-state="pending|failed"]
+             the note next to a link while its page is read, or when it could not be
   .sl-tag[data-color][data-value]
   .sl-link   .sl-thumb   .sl-check[aria-checked="true"]
 
@@ -73,6 +75,8 @@ Inside cells
     column's first name, lowercased with dashes ("Got it" → got-it), and stay
     the same when the column is renamed. get_list shows them.
   data-type="text|number|currency|url|image|checkbox|select|date"
+  data-width="narrow|wide" on .sl-th and .sl-cell when a column has one.
+  data-lookup="pending|done|failed" on a link cell that has been looked up.
   data-primary on the row's name cell (the first text column).
   data-done on a row whose first checkbox column is ticked.
   data-col-<column id>="<value>" on .sl-row for every choice and checkbox
@@ -113,6 +117,7 @@ A different title face:
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&display=swap');
   :root { --sl-font-display: 'Fraunces', serif; --sl-title-stretch: 100%; --sl-title-weight: 700; }
 
-Hide a column on phones only:
+Hidden columns (update_column hidden: true) are left out of the page entirely;
+to hide one only on phones, use CSS:
   @media (max-width: 719px) { .sl-cell[data-col="notes"] { display: none; } }
 `;

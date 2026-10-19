@@ -4,7 +4,8 @@
 import { display, tag } from './cells.ts';
 import { openDialog } from './dialog.ts';
 import { h, icon } from './dom.ts';
-import type { CellValue, Column, Item, ListPayload } from '../../shared/types.ts';
+import { money } from './format.ts';
+import type { CellValue, Column, Item, LinkInfo, ListPayload } from '../../shared/types.ts';
 
 interface EditorOptions {
   list: ListPayload;
@@ -12,6 +13,27 @@ interface EditorOptions {
   canEdit: boolean;
   onSave(values: Record<string, CellValue>): Promise<void>;
   onDelete?(): Promise<void>;
+  /** Look the row's links up again. */
+  onLookup?(): Promise<void>;
+}
+
+/** What the last lookup of a link said, under its field. */
+function linkStatus(info: LinkInfo, retry?: () => void): HTMLElement {
+  let text: string;
+  if (info.status === 'pending') text = 'Looking up the price and photo…';
+  else if (info.status === 'failed') text = `Couldn’t read this page. ${info.error ?? ''}`.trim();
+  else {
+    const found = [info.price !== undefined ? (info.currency ? money(info.price, info.currency) : String(info.price)) : null, info.image ? 'a photo' : null]
+      .filter(Boolean)
+      .join(' and ');
+    text = found ? `Found ${found} on ${info.site ?? 'the page'}.` : `Read ${info.site ?? 'the page'}.`;
+  }
+  return h('p', { class: 'sl-hint sl-link-status', data: { state: info.status } },
+    text,
+    retry && info.status !== 'pending'
+      ? h('button', { type: 'button', class: 'sl-text-button', on: { click: retry } }, 'Look up again')
+      : null,
+  );
 }
 
 type Reader = () => CellValue;
@@ -92,7 +114,7 @@ function field(column: Column, value: CellValue | undefined): { control: HTMLEle
   }
 }
 
-export function openItemEditor({ list, item, canEdit, onSave, onDelete }: EditorOptions): void {
+export function openItemEditor({ list, item, canEdit, onSave, onDelete, onLookup }: EditorOptions): void {
   const readers = new Map<string, Reader>();
   const form = h('form', { class: 'sl-form', novalidate: true });
 
@@ -110,10 +132,16 @@ export function openItemEditor({ list, item, canEdit, onSave, onDelete }: Editor
     }
     const { control, read } = field(column, value);
     readers.set(column.id, read);
+    const info = item?.links?.[column.id];
     form.append(
       h('div', { class: 'sl-field', data: { col: column.id, type: column.type } },
         column.type === 'checkbox' ? null : h('label', { class: 'sl-label', id: `sl-field-${column.id}-label`, for: `sl-field-${column.id}` }, column.name),
         control,
+        info && info.url === value
+          ? linkStatus(info, onLookup ? () => void onLookup().then(() => dialog.close()) : undefined)
+          : column.type === 'url' && column.lookup !== false && !item
+            ? h('p', { class: 'sl-hint' }, 'Paste a shop link and the price, photo and name fill in by themselves.')
+            : null,
       ),
     );
   }

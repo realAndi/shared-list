@@ -116,6 +116,10 @@ export class Store {
     return rows.map((r) => ({ ...r, editable: r.editable === 1 }));
   }
 
+  ids(): string[] {
+    return (this.db.prepare('SELECT id FROM lists').all() as { id: string }[]).map((r) => r.id);
+  }
+
   count(): number {
     return (this.db.prepare('SELECT count(*) AS n FROM lists').get() as { n: number }).n;
   }
