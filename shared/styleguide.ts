@@ -42,8 +42,8 @@ your own there too, or set colors once on :root to use them in both modes.
 
 ## Structure
 
-  body[data-page="list"]      the list page (also "lock", "landing", "admin")
-  .sl-app[data-list="<id>"]   page root; data-role is admin, editor or viewer
+  body[data-page="list"]      the list page (also "lock", "landing", "missing")
+  .sl-app[data-list="<id>"]   page root; data-role is editor or viewer
   .sl-topbar  .sl-brand  .sl-actions  .sl-button  .sl-icon-button
   .sl-main                    the page column
   .sl-header  .sl-title  .sl-description  .sl-meta

@@ -1,15 +1,7 @@
-import { storage } from './dom.ts';
-import type { ListPayload, ListSummary } from '../../shared/types.ts';
+import type { ListPayload } from '../../shared/types.ts';
 
 /** Where the app is mounted, from the <base> the server injects; `/` in development. */
 export const BASE = new URL(document.querySelector('base')?.getAttribute('href') ?? '/', location.origin).pathname;
-
-const ADMIN_KEY = 'sl-admin-token';
-
-export const adminToken = {
-  get: () => storage.get(ADMIN_KEY),
-  set: (token: string | null) => storage.set(ADMIN_KEY, token),
-};
 
 export class ApiError extends Error {
   readonly status: number;
@@ -22,16 +14,13 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown, token = adminToken.get()): Promise<T | undefined> {
+async function request<T>(method: string, path: string, body?: unknown): Promise<T | undefined> {
   let res: Response;
   try {
     res = await fetch(BASE + path, {
       method,
       credentials: 'same-origin',
-      headers: {
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
@@ -41,11 +30,6 @@ async function request<T>(method: string, path: string, body?: unknown, token = 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const error = data?.error ?? {};
-    // A stored admin token that has since been rotated: forget it and carry on as a visitor.
-    if (res.status === 401 && token && /admin token/.test(error.message ?? '')) {
-      adminToken.set(null);
-      return request<T>(method, path, body, null);
-    }
     throw new ApiError(res.status, error.code ?? 'error', error.message ?? `The server answered ${res.status}.`);
   }
   return data as T;
@@ -74,6 +58,5 @@ export const api = {
   removeItem: (id: string, item: string) => request<ListResponse>('DELETE', `${list(id)}/items/${encodeURIComponent(item)}`),
   moveItem: (id: string, item: string, index: number) =>
     request<ListResponse>('POST', `${list(id)}/items/${encodeURIComponent(item)}/move`, { index }),
-  admin: (token?: string) => request<{ lists: ListSummary[] }>('GET', 'api/admin', undefined, token ?? adminToken.get()),
   create: (input: Record<string, unknown>) => request<ListResponse>('POST', 'api/lists', input),
 };

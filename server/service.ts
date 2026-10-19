@@ -46,8 +46,9 @@ export interface ListPatch {
   group_by?: unknown;
 }
 
-export interface AdminPatch {
+export interface AccessPatch {
   password?: unknown;
+  /** Only the token that created a list may change this; the caller checks. */
   editable?: unknown;
 }
 
@@ -92,8 +93,8 @@ export class ListService {
     };
   }
 
-  summaries(origin: string): ListSummary[] {
-    return this.store.summaries().map((s) => ({ ...s, url: this.link(s.id, origin) }));
+  summariesFor(tokenId: string, origin: string): ListSummary[] {
+    return this.store.summariesFor(tokenId).map((s) => ({ ...s, url: this.link(s.id, origin) }));
   }
 
   async checkPassword(id: string, password: unknown): Promise<ListRow> {
@@ -110,7 +111,11 @@ export class ListService {
     }
   }
 
-  async create(input: CreateListInput): Promise<ListRow> {
+  /**
+   * `owner` is the MCP token making the list, if any. A list made on the web has
+   * no owner, so it is always editable: nobody would be left who could edit it.
+   */
+  async create(input: CreateListInput, owner: string | null = null): Promise<ListRow> {
     if (this.store.count() >= this.limits.maxLists) {
       throw new AppError('too_large', `This server already holds ${this.limits.maxLists} lists, its limit.`);
     }
@@ -152,7 +157,8 @@ export class ListService {
       title,
       password_hash: await hashPassword(password),
       auth_epoch: 1,
-      editable: input.editable === undefined ? true : Boolean(input.editable),
+      editable: owner === null || input.editable === undefined ? true : Boolean(input.editable),
+      owner_token: owner,
       doc,
       css: input.css === undefined || input.css === null ? '' : validateCss(input.css, this.limits),
       version: 1,
@@ -185,7 +191,7 @@ export class ListService {
     }).row;
   }
 
-  async updateAdmin(id: string, patch: AdminPatch): Promise<ListRow> {
+  async updateAccess(id: string, patch: AccessPatch): Promise<ListRow> {
     const hash = patch.password === undefined ? undefined : await hashPassword(validatePassword(patch.password));
     return this.change(id, (row) => {
       if (hash) {

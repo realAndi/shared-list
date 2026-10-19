@@ -19,7 +19,7 @@ import {
   validateListId,
 } from '../server/model.ts';
 
-const { limits } = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), 'shared-list-model-')), ADMIN_TOKEN: 'x', SESSION_SECRET: 'y' });
+const { limits } = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), 'shared-list-model-')), SESSION_SECRET: 'y' });
 
 function furniture() {
   const doc = emptyDoc();
@@ -110,6 +110,7 @@ test('grouping, moving, editing and removing', () => {
 test('list ids', () => {
   assert.equal(validateListId('Apartment-Furniture'), 'apartment-furniture');
   assert.throws(() => validateListId('api'), /reserved/);
+  assert.equal(validateListId('admin'), 'admin');
   assert.throws(() => validateListId('-x-'), /lowercase/);
   assert.throws(() => validateListId('a'), /3 to 48/);
 });

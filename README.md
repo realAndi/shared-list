@@ -18,33 +18,57 @@ Live at <https://reallyitsandi.com/shared-list/>.
 
 ## What it does
 
-- **One link, one password.** Anyone with both can open the list. The lock
-  screen shows nothing about the list, not even its title. Sessions last 30 days
-  per list and per device, and changing the password signs everyone out.
+- **No accounts.** Press *Create list*, give it a title and a password, and send
+  the link. Anyone with both can open it, edit it, change its password or delete
+  it. The lock screen shows nothing about the list, not even its title. Sessions
+  last 30 days per list and per device, and a new password signs everyone else
+  out.
 - **Edit together.** Tick rows, edit cells in place (click on a computer, tap
   on a phone), add rows, add and retype columns. Open tabs pick up each other's
-  changes within a few seconds. A list can also be view-only.
+  changes within a few seconds.
 - **Typed columns.** Money columns total up, along with "how much is left" for
   rows that aren't ticked yet. Choice columns become colored tags and can group
   the rows. Links show their site; image links show a thumbnail.
 - **Per-list CSS.** Every list has a stylesheet that restyles its page for
   everyone. The default look is built on `--sl-*` variables and stable class
   names, so most themes are a few lines. See [Styling](#styling).
-- **MCP.** Fifteen tools over Streamable HTTP: create, read, edit and restyle
-  lists. See [For agents](#for-agents).
+- **MCP.** Sixteen tools over Streamable HTTP to create, read, edit and restyle
+  lists, with tokens that only the server's operator can make. See
+  [For agents](#for-agents).
 - **Small.** One Node process and one SQLite file. No build step on the server,
   two runtime dependencies, about 50 MB of memory.
 
 ## For agents
 
-The server speaks [MCP](https://modelcontextprotocol.io) at `<base>/mcp`, statelessly, with
-the admin token as a bearer token.
+The server speaks [MCP](https://modelcontextprotocol.io) at `<base>/mcp`,
+statelessly. Each agent connects with its own token, sent as a bearer token.
+
+### Tokens
+
+Tokens are made on the server and nowhere else. No page and no API route can
+mint one, so handing one out takes a shell on the box:
+
+```sh
+node server/cli.ts token create "Roommate"     # prints the token once
+node server/cli.ts token list
+node server/cli.ts token revoke Roommate        # by name or id
+```
+
+In Docker, prefix each one with `docker exec <container>`. Only a hash of each
+token is stored.
+
+A token sees the lists it created, plus any list it has opened with
+`open_list` and that list's password. A token you give someone shows them none
+of your other lists. Access through `open_list` ends when the list's password
+changes, and only the token that created a list can make it view-only.
+
+### Connecting
 
 **Claude Code**
 
 ```sh
 claude mcp add --transport http shared-list https://your.host/mcp \
-  --header "Authorization: Bearer <admin token>"
+  --header "Authorization: Bearer <token>"
 ```
 
 **Any other client** that takes a JSON config:
@@ -55,19 +79,20 @@ claude mcp add --transport http shared-list https://your.host/mcp \
     "shared-list": {
       "type": "http",
       "url": "https://your.host/mcp",
-      "headers": { "Authorization": "Bearer <admin token>" }
+      "headers": { "Authorization": "Bearer <token>" }
     }
   }
 }
 ```
 
 A client that can only be given a URL can put the token in the path instead:
-`https://your.host/mcp/<admin token>`. That URL is a credential, so keep it
+`https://your.host/mcp/<token>`. That URL is a credential, so keep it
 private, and remember that it ends up in the proxy's access log.
 
 | Tool | What it does |
 | --- | --- |
-| `list_lists` | Every list: id, title, link, item count |
+| `list_lists` | The token's lists: id, title, link, item count |
+| `open_list` | Get access to someone else's list with its password |
 | `get_list` | Columns, items (with ids) and view settings |
 | `create_list` | A new list with a password, from columns or a preset, optionally with items and CSS |
 | `update_list` | Title, description, grouping, password, edit access |
@@ -119,10 +144,10 @@ blocks other font hosts and every script.
 git clone https://github.com/realAndi/shared-list && cd shared-list
 docker build -t shared-list .
 docker run -d --name shared-list -p 127.0.0.1:8787:8787 -v "$PWD/data:/data" shared-list
-docker exec shared-list cat /data/admin-token
+docker exec shared-list node server/cli.ts token create "Me"   # only if you want MCP
 ```
 
-Open <http://localhost:8787/admin>, sign in with the token, and make a list.
+Open <http://localhost:8787/> and press *Create list*.
 [`deploy/compose.example.yml`](deploy/compose.example.yml) and
 [`deploy/nginx.example.conf`](deploy/nginx.example.conf) put it behind a reverse
 proxy, at a whole domain or under a sub-path.
@@ -147,11 +172,11 @@ All optional.
 | `BASE_PATH` | `/` | Where the app is mounted, e.g. `/shared-list` |
 | `PUBLIC_URL` | from the request | Origin for links the server hands out, e.g. `https://example.com` |
 | `DATA_DIR` | `./data` | The SQLite file, backups, and generated secrets |
-| `ADMIN_TOKEN` | generated | Creates and deletes lists; the MCP credential. Written to `DATA_DIR/admin-token` if unset |
 | `SESSION_SECRET` | generated | Signs session cookies. Written to `DATA_DIR/session-secret` if unset |
 | `TRUST_PROXY` | on for a socket | Believe `X-Real-IP` and `X-Forwarded-Proto`. Turn on behind a proxy |
 | `BACKUP_KEEP` | `7` | Daily copies of the database to keep in `DATA_DIR/backups`; `0` turns them off |
 | `MAX_LISTS` | `200` | |
+| `MAX_CREATES_PER_HOUR` | `10` | New lists one address can make from the web |
 | `MAX_ITEMS` | `1000` | Per list |
 | `MAX_COLUMNS` | `30` | Per list |
 | `MAX_CELL_CHARS` | `5000` | |
@@ -169,6 +194,8 @@ server/
   app.ts        request context (base path, proxy headers) and dispatch
   api.ts        the JSON API the web client uses
   mcp.ts        the MCP tools
+  tokens.ts     MCP tokens: made, checked, revoked
+  cli.ts        the only place tokens are made
   service.ts    each operation as one transaction
   model.ts      the list document: columns, values, items — pure functions
   store.ts      SQLite via node:sqlite
@@ -191,15 +218,18 @@ something changes.
   `HttpOnly`, `SameSite=Lax`, and scoped to the app's path. It names one list
   and the password generation it was issued under.
 - Ten wrong passwords for a list from one address in 15 minutes, or forty
-  across all lists, and that address waits. The admin token has its own limit.
+  across all lists, and that address waits. Wrong MCP tokens, and wrong
+  passwords given to `open_list`, have limits of their own.
 - Writes accept only `application/json` and are refused when `Origin` or
   `Sec-Fetch-Site` says they came from another site.
 - Pages are built with DOM calls rather than HTML strings, so list content can't
   turn into markup. The CSP allows scripts only from the app itself.
 - Custom CSS is served as its own stylesheet, behind the same session as the
   list.
-- Without the admin token there is no way to create a list. That keeps the
-  server's storage in the hands of whoever runs it.
+- Anyone can create a list, so storage is capped in three places: new lists per
+  address per hour, lists on the server, and the size of the database.
+- There is no admin account, page or master key. MCP tokens are made with the
+  CLI, which needs a shell on the server, and only their SHA-256 is stored.
 
 ## Development
 

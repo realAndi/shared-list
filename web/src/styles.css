@@ -1083,12 +1083,6 @@ button.sl-sort:hover,
   min-width: 0;
 }
 
-.sl-field-pair {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-}
-
 .sl-field-stack {
   display: grid;
   gap: 0.5rem;
@@ -1352,10 +1346,6 @@ button.sl-sort:hover,
     overflow-x: auto;
   }
 
-  .sl-field-pair {
-    grid-template-columns: 1fr;
-  }
-
   .sl-column-main {
     grid-template-columns: minmax(0, 1fr) 7rem;
   }
@@ -1483,113 +1473,30 @@ button.sl-sort:hover,
 
 .sl-landing {
   display: grid;
-  gap: 3rem;
-}
-
-.sl-hero {
-  display: grid;
-  gap: 1.25rem;
-  padding-top: 2rem;
+  align-content: center;
+  justify-items: start;
+  gap: 1.5rem;
+  padding-block: 10vh 4rem;
 }
 
 .sl-hero-title {
-  font-size: clamp(3.25rem, 10vw, 7.5rem);
+  font-size: clamp(3.25rem, 11vw, 8rem);
   letter-spacing: -0.035em;
-  line-height: 0.92;
+  line-height: 0.9;
 }
 
 .sl-lead {
-  max-width: 36ch;
+  max-width: 34ch;
   font-size: clamp(1.125rem, 2vw, 1.375rem);
   line-height: 1.4;
   color: var(--sl-ink-soft);
 }
 
-.sl-figure {
-  margin: 0;
-}
-
-.sl-example {
-  padding: 1.5rem 1.75rem 0.5rem;
-  border: 1px solid var(--sl-border);
-  border-radius: 10px;
-  background: var(--sl-surface);
-  box-shadow: var(--sl-shadow);
-}
-
-.sl-example-head {
-  display: grid;
-  gap: 0.5rem;
-  margin-bottom: 1.25rem;
-}
-
-.sl-example-title {
-  font-family: var(--sl-font-display);
-  font-stretch: var(--sl-title-stretch);
-  font-weight: var(--sl-title-weight);
-  font-size: 1.625rem;
-  letter-spacing: -0.015em;
-  line-height: 1.05;
-}
-
-.sl-example .sl-row:last-child {
-  border-bottom: 0;
-}
-
-.sl-example .sl-row .sl-cell:not([data-type='checkbox']) {
-  cursor: default;
-}
-
-.sl-caption {
+.sl-create {
+  min-height: 3.25rem;
   margin-top: 0.75rem;
-  font: 0.75rem var(--sl-font-mono);
-  color: var(--sl-ink-faint);
-}
-
-.sl-points {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 2.5rem 3rem;
-  padding-top: 2rem;
-  border-top: 2px solid var(--sl-margin);
-}
-
-.sl-point {
-  display: grid;
-  align-content: start;
-  gap: 0.625rem;
-  color: var(--sl-ink-soft);
-}
-
-.sl-point-title {
-  font-size: 1.125rem;
-  font-weight: 700;
-  color: var(--sl-ink);
-}
-
-.sl-point a {
-  color: var(--sl-ink);
-}
-
-.sl-open-form {
-  display: grid;
-  gap: 0.5rem;
-}
-
-.sl-code-block {
-  margin: 0;
-  padding: 0.875rem 1rem;
-  border: 1px solid var(--sl-border);
-  border-radius: var(--sl-radius);
-  background: var(--sl-paper);
-  color: var(--sl-ink);
-  font: 0.8125rem/1.6 var(--sl-font-mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-code {
-  font: 0.875em var(--sl-font-mono);
+  padding: 0 1.5rem;
+  font-size: 1.0625rem;
 }
 
 .sl-footer {
@@ -1605,109 +1512,15 @@ code {
 
 @media (max-width: 719px) {
   .sl-landing {
-    gap: 2rem;
+    padding-block: 6vh 3rem;
   }
 
-  .sl-hero {
-    padding-top: 0.5rem;
-  }
-
-  .sl-example {
-    padding: 1.25rem 16px 0.25rem;
-  }
-
-  .sl-example .sl-table {
-    border-top-width: 2px;
-  }
-
-  .sl-points {
-    grid-template-columns: 1fr;
-    gap: 2rem;
+  .sl-create {
+    width: 100%;
   }
 
   .sl-footer {
     padding-inline: 16px;
-  }
-}
-
-/* --- admin ----------------------------------------------------------------- */
-
-.sl-admin {
-  display: grid;
-  gap: 1.5rem;
-  align-content: start;
-}
-
-.sl-admin-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 1.5rem;
-  align-items: start;
-}
-
-.sl-panel {
-  display: grid;
-  gap: 1rem;
-  padding: 1.5rem;
-  border: 1px solid var(--sl-border);
-  border-radius: 10px;
-  background: var(--sl-surface);
-  color: var(--sl-ink-soft);
-}
-
-.sl-panel.sl-form {
-  gap: 1.125rem;
-}
-
-.sl-panel-title {
-  padding-bottom: 0.75rem;
-  border-bottom: 2px solid var(--sl-margin);
-  font-size: 1.125rem;
-  font-weight: 700;
-  color: var(--sl-ink);
-}
-
-.sl-admin-lists {
-  display: grid;
-}
-
-.sl-admin-list {
-  display: grid;
-  gap: 0.125rem;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--sl-rule);
-  text-decoration: none;
-}
-
-.sl-admin-list:hover .sl-admin-list-title {
-  text-decoration: underline;
-}
-
-.sl-admin-list-title {
-  font-weight: 600;
-  color: var(--sl-ink);
-}
-
-.sl-admin-list-meta {
-  font: 0.75rem var(--sl-font-mono);
-  color: var(--sl-ink-faint);
-}
-
-.sl-created:empty {
-  display: none;
-}
-
-.sl-created {
-  display: grid;
-  gap: 0.5rem;
-  padding: 1rem 1.25rem;
-  border-left: 3px solid var(--sl-accent);
-  background: var(--sl-surface);
-}
-
-@media (max-width: 899px) {
-  .sl-admin-grid {
-    grid-template-columns: 1fr;
   }
 }
 

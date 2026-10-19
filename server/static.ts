@@ -96,13 +96,13 @@ export function createStatic(config: Config) {
       page(ctx, true);
       return true;
     }
-    if (ctx.path === 'admin' || LIST_PATH.test(ctx.path)) {
+    if (LIST_PATH.test(ctx.path)) {
       page(ctx, false);
       return true;
     }
     // "abc/" is the same list as "abc".
     const trimmed = ctx.path.replace(/\/+$/, '');
-    if (trimmed !== ctx.path && (trimmed === 'admin' || LIST_PATH.test(trimmed))) {
+    if (trimmed !== ctx.path && LIST_PATH.test(trimmed)) {
       ctx.res.writeHead(301, { Location: `${config.basePath}${trimmed}` });
       ctx.res.end();
       return true;

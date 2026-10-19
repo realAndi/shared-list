@@ -1,5 +1,5 @@
-// The settings dialog: the list's details, its columns, its CSS, and — with
-// the admin token — who can get in.
+// The settings dialog: the list's details, its columns, its CSS, and its
+// password. Anyone who can edit the list can change all of them.
 
 import { api } from './api.ts';
 import { tag } from './cells.ts';
@@ -281,19 +281,22 @@ function styleTab(host: SettingsHost): HTMLElement {
 
 function accessTab(host: SettingsHost): HTMLElement {
   const list = host.list();
-  const password = h('input', { class: 'sl-input', id: 'sl-set-password', type: 'password', autocomplete: 'new-password', minlength: '4' });
-  const editable = h('input', { type: 'checkbox', id: 'sl-set-editable', class: 'sl-switch-input', checked: list.editable });
-  editable.addEventListener('change', () =>
-    void attempt(async () => host.apply((await api.update(list.id, { editable: editable.checked }))!.list), editable.checked ? 'Anyone with the password can edit' : 'Now view-only'),
-  );
+  const password = h('input', {
+    class: 'sl-input',
+    id: 'sl-set-password',
+    type: 'text',
+    minlength: '4',
+    autocomplete: 'off',
+    autocapitalize: 'off',
+    spellcheck: false,
+  });
   const form = h(
     'form',
     { class: 'sl-form' },
-    h('label', { class: 'sl-switch', for: 'sl-set-editable' }, editable, h('span', { class: 'sl-switch-track' }), h('span', {}, 'People with the password can edit')),
     h('div', { class: 'sl-field' },
       h('label', { class: 'sl-label', for: 'sl-set-password' }, 'New password'),
       h('div', { class: 'sl-row-inline' }, password, h('button', { type: 'submit', class: 'sl-button' }, 'Change password')),
-      h('p', { class: 'sl-hint' }, 'Everyone who has the list open is signed out and needs the new one.'),
+      h('p', { class: 'sl-hint' }, 'You stay in. Everyone else who has the list open is signed out until they enter the new one.'),
     ),
     h('div', { class: 'sl-danger-zone' },
       h('div', {}, h('strong', {}, 'Delete this list'), h('p', { class: 'sl-hint' }, 'Its items and style are gone for good, and the link stops working.')),
@@ -327,8 +330,8 @@ export function openSettings(host: SettingsHost): void {
     ['Details', detailsTab],
     ['Columns', columnsTab],
     ['Style', styleTab],
+    ['Password', accessTab],
   ];
-  if (host.list().role === 'admin') tabs.push(['Access', accessTab]);
 
   const panel = h('div', { class: 'sl-tab-panel', role: 'tabpanel' });
   const buttons = tabs.map(([label, build], index) => {

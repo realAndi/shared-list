@@ -58,7 +58,8 @@ export interface ListView {
   group_by: string | null;
 }
 
-export type Role = 'admin' | 'editor' | 'viewer';
+/** `owner` is only ever an MCP token that created the list; people in a browser are editors or viewers. */
+export type Role = 'owner' | 'editor' | 'viewer';
 
 /** A list as the web client and `get_list` see it. */
 export interface ListPayload {

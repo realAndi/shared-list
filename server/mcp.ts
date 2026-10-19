@@ -1,26 +1,32 @@
 // MCP over Streamable HTTP, stateless: every POST gets a fresh server and
 // transport, so there is no session to keep, expire or lose on a restart. The
-// admin token is the credential, sent as a bearer token or, for clients that
-// can only be given a URL, as the last path segment (/mcp/<token>).
+// credential is an MCP token made with the CLI, sent as a bearer token or, for
+// clients that can only be given a URL, as the last path segment (/mcp/<token>).
+//
+// A token sees the lists it created, and the lists it has opened with their
+// password (open_list), so a token handed to someone shows them nobody else's.
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import type { Config } from './config.ts';
-import { FailureLimiter, safeEqual } from './auth.ts';
+import { RateLimiter } from './auth.ts';
 import { AppError } from './errors.ts';
 import { bearer, json, readBody, type Context } from './http.ts';
 import type { ListService } from './service.ts';
-import type { ListRow } from './store.ts';
+import type { ListRow, TokenRow } from './store.ts';
+import { verifyToken } from './tokens.ts';
 import { STYLE_GUIDE } from '../shared/styleguide.ts';
 import { PRESETS } from '../shared/presets.ts';
-import { COLUMN_TYPES, TAG_COLORS } from '../shared/types.ts';
+import { COLUMN_TYPES, TAG_COLORS, type Role } from '../shared/types.ts';
 
 const INSTRUCTIONS = `Shared List hosts password-protected lists that people open from a link on a phone or computer, like a small, good-looking spreadsheet.
 
 A list has typed columns and rows (items). Refer to a column by its name or its id; item values are keyed the same way. Each list can also carry its own CSS, which restyles the page everyone sees: call get_style_guide before writing any.
 
-Every list needs a password. When you create one, tell the person its link and password so they can share both. Prefer one add_items call with many rows over many single calls.`;
+Every list needs a password. When you create one, tell the person its link and password so they can share both. Prefer one add_items call with many rows over many single calls.
+
+This token sees the lists it created and the ones it has opened. To work on a list someone else made, ask the person for its password and call open_list.`;
 
 const COLUMN_TYPE_HELP =
   'text, number, currency (a number shown as money), url (a link), image (a link to a picture, shown as a thumbnail), checkbox (true/false; the first one marks a row as done), select (one of a set of labeled, colored options), date (YYYY-MM-DD).';
@@ -59,26 +65,67 @@ async function run(fn: () => unknown | Promise<unknown>) {
   }
 }
 
-function buildServer(service: ListService, origin: string): McpServer {
+interface Deps {
+  service: ListService;
+  token: TokenRow;
+  origin: string;
+  passwordFailures: RateLimiter;
+}
+
+function buildServer({ service, token, origin, passwordFailures }: Deps): McpServer {
   const server = new McpServer({ name: 'shared-list', version: '1.0.0' }, { instructions: INSTRUCTIONS });
-  const view = (row: ListRow) => {
-    const { role: _role, ...list } = service.payload(row, 'admin', origin);
-    return list;
-  };
   const brief = (row: ListRow) => ({ id: row.id, url: service.link(row.id, origin), title: row.title, version: row.version });
 
+  /** What this token may do with a list: `own` is the token that made it. */
+  function access(id: string, need: 'read' | 'edit' | 'own' = 'edit'): { row: ListRow; role: Role } {
+    const row = service.get(id);
+    let role: Role;
+    if (row.owner_token === token.id) role = 'owner';
+    else if (service.store.grantEpoch(token.id, row.id) === row.auth_epoch) role = row.editable ? 'editor' : 'viewer';
+    else throw new AppError('forbidden', `This token has not opened "${id}". Ask for the list's password and call open_list.`);
+    if (need === 'edit' && role === 'viewer') throw new AppError('forbidden', `"${row.title}" is view-only for this token.`);
+    if (need === 'own' && role !== 'owner') throw new AppError('forbidden', `Only the token that created "${row.title}" can do that.`);
+    return { row, role };
+  }
+
+  const edit = (id: string) => access(id, 'edit');
+  const view = (row: ListRow, role: Role) => service.payload(row, role, origin);
+
   server.registerTool('list_lists', {
-    title: 'List all lists',
-    description: 'Every list on this server: id, title, link, item count and when it last changed, most recent first.',
+    title: 'List my lists',
+    description: 'The lists this token created or has opened: id, title, link, item count and when each last changed, most recent first.',
     annotations: { readOnlyHint: true },
-  }, () => run(() => ({ lists: service.summaries(origin) })));
+  }, () => run(() => ({ lists: service.summariesFor(token.id, origin) })));
+
+  server.registerTool('open_list', {
+    title: 'Open a list with its password',
+    description: 'Give this token access to a list someone else made, using the password from its owner. Access lasts until the list\'s password changes. Returns the list.',
+    inputSchema: { list_id: listId, password: z.string() },
+  }, ({ list_id, password }) => run(async () => {
+    const key = `${token.id} ${list_id}`;
+    const wait = passwordFailures.blockedFor(key);
+    if (wait) throw new AppError('rate_limited', `Too many wrong passwords for "${list_id}". Try again in ${Math.ceil(wait / 60)} minutes.`);
+    let row: ListRow;
+    try {
+      row = await service.checkPassword(list_id, password);
+    } catch (error) {
+      passwordFailures.hit(key);
+      throw error;
+    }
+    passwordFailures.clear(key);
+    if (row.owner_token !== token.id) service.store.grant(token.id, row.id, row.auth_epoch);
+    return view(row, row.owner_token === token.id ? 'owner' : row.editable ? 'editor' : 'viewer');
+  }));
 
   server.registerTool('get_list', {
     title: 'Read a list',
     description: 'A list with its columns, every item (with item ids) and its view settings. Use it before editing so you know the column ids and item ids.',
     inputSchema: { list_id: listId },
     annotations: { readOnlyHint: true },
-  }, ({ list_id }) => run(() => view(service.get(list_id))));
+  }, ({ list_id }) => run(() => {
+    const { row, role } = access(list_id, 'read');
+    return view(row, role);
+  }));
 
   server.registerTool('create_list', {
     title: 'Create a list',
@@ -94,17 +141,17 @@ function buildServer(service: ListService, origin: string): McpServer {
       columns: z.array(column).optional(),
       items: z.array(values).optional().describe('Rows to start with.'),
       group_by: z.string().optional().describe('A select or checkbox column to group rows under.'),
-      editable: z.boolean().optional().describe('Whether people with the password can edit (default true). false makes it view-only for them.'),
+      editable: z.boolean().optional().describe('Whether people with the password can edit (default true). false makes it view-only for everyone but this token.'),
       css: z.string().optional().describe('Custom CSS. Read get_style_guide first.'),
     },
   }, (args) => run(async () => {
-    const row = await service.create(args);
+    const row = await service.create(args, token.id);
     return { ...brief(row), password: args.password, columns: row.doc.columns, items: row.doc.items.length };
   }));
 
   server.registerTool('update_list', {
     title: 'Change list settings',
-    description: 'Change the title, description, grouping, password or edit access of a list. Only the fields you send change. A new password signs everyone out.',
+    description: 'Change the title, description, grouping, password or edit access of a list. Only the fields you send change. A new password signs everyone out. Only the token that created a list can change editable.',
     inputSchema: {
       list_id: listId,
       title: z.string().optional(),
@@ -114,8 +161,13 @@ function buildServer(service: ListService, origin: string): McpServer {
       editable: z.boolean().optional(),
     },
   }, ({ list_id, password, editable, ...patch }) => run(async () => {
+    const { row: current } = access(list_id, editable === undefined ? 'edit' : 'own');
     let row = service.updateList(list_id, patch);
-    if (password !== undefined || editable !== undefined) row = await service.updateAdmin(list_id, { password, editable });
+    if (password !== undefined || editable !== undefined) {
+      row = await service.updateAccess(list_id, { password, editable });
+      // Keep this token's own way in past the new password.
+      if (password !== undefined && current.owner_token !== token.id) service.store.grant(token.id, row.id, row.auth_epoch);
+    }
     return { ...brief(row), editable: row.editable, description: row.doc.description, view: row.doc.view };
   }));
 
@@ -125,6 +177,7 @@ function buildServer(service: ListService, origin: string): McpServer {
     inputSchema: { list_id: listId },
     annotations: { destructiveHint: true },
   }, ({ list_id }) => run(() => {
+    edit(list_id);
     service.delete(list_id);
     return { deleted: list_id };
   }));
@@ -138,6 +191,7 @@ function buildServer(service: ListService, origin: string): McpServer {
       position: z.number().int().optional().describe('Index to insert at; 0 is first. Appends when left out.'),
     },
   }, ({ list_id, columns, position }) => run(() => {
+    edit(list_id);
     const { row, result } = service.addColumns(list_id, columns, position);
     return { ...brief(row), added: result, columns: row.doc.columns };
   }));
@@ -155,6 +209,7 @@ function buildServer(service: ListService, origin: string): McpServer {
       position: z.number().int().optional().describe('New index; 0 is first.'),
     },
   }, ({ list_id, column: key, ...patch }) => run(() => {
+    edit(list_id);
     const { row, result } = service.updateColumn(list_id, key, patch);
     return { ...brief(row), column: result.column, cleared: result.cleared };
   }));
@@ -165,6 +220,7 @@ function buildServer(service: ListService, origin: string): McpServer {
     inputSchema: { list_id: listId, column: z.string().describe('Column name or id.') },
     annotations: { destructiveHint: true },
   }, ({ list_id, column: key }) => run(() => {
+    edit(list_id);
     const { row, result } = service.removeColumn(list_id, key);
     return { ...brief(row), removed: result.id, columns: row.doc.columns };
   }));
@@ -178,6 +234,7 @@ function buildServer(service: ListService, origin: string): McpServer {
       position: z.number().int().optional().describe('Index to insert at; 0 is the top. Appends when left out.'),
     },
   }, ({ list_id, items, position }) => run(() => {
+    edit(list_id);
     const { row, result } = service.addItems(list_id, items, position);
     return { ...brief(row), added: result };
   }));
@@ -190,6 +247,7 @@ function buildServer(service: ListService, origin: string): McpServer {
       updates: z.array(z.object({ item_id: z.string(), values })).min(1),
     },
   }, ({ list_id, updates }) => run(() => {
+    edit(list_id);
     const { row, result } = service.updateItems(list_id, updates);
     return { ...brief(row), updated: result };
   }));
@@ -200,6 +258,7 @@ function buildServer(service: ListService, origin: string): McpServer {
     inputSchema: { list_id: listId, item_ids: z.array(z.string()).min(1) },
     annotations: { destructiveHint: true },
   }, ({ list_id, item_ids }) => run(() => {
+    edit(list_id);
     const { row, result } = service.removeItems(list_id, item_ids);
     return { ...brief(row), removed: result, remaining: row.doc.items.length };
   }));
@@ -209,6 +268,7 @@ function buildServer(service: ListService, origin: string): McpServer {
     description: 'Move a row to a new position in the list order. 0 is the top.',
     inputSchema: { list_id: listId, item_id: z.string(), index: z.number().int() },
   }, ({ list_id, item_id, index }) => run(() => {
+    edit(list_id);
     const row = service.moveItem(list_id, item_id, index);
     return { ...brief(row), order: row.doc.items.map((i) => i.id) };
   }));
@@ -224,13 +284,14 @@ function buildServer(service: ListService, origin: string): McpServer {
     description: 'The custom CSS a list currently has, empty if none.',
     inputSchema: { list_id: listId },
     annotations: { readOnlyHint: true },
-  }, ({ list_id }) => run(() => ({ id: list_id, css: service.get(list_id).css })));
+  }, ({ list_id }) => run(() => ({ id: list_id, css: access(list_id, 'read').row.css })));
 
   server.registerTool('set_css', {
     title: 'Restyle a list',
     description: 'Replace a list’s custom CSS; send an empty string to go back to the default look. It loads after the built-in styles, so overriding the --sl-* variables is usually enough. Read get_style_guide first.',
     inputSchema: { list_id: listId, css: z.string() },
   }, ({ list_id, css }) => run(() => {
+    edit(list_id);
     const row = service.setCss(list_id, css);
     return { ...brief(row), bytes: Buffer.byteLength(row.css) };
   }));
@@ -239,7 +300,8 @@ function buildServer(service: ListService, origin: string): McpServer {
 }
 
 export function createMcp({ config, service }: { config: Config; service: ListService }) {
-  const failures = new FailureLimiter(10, 15 * 60_000);
+  const failures = new RateLimiter(10, 15 * 60_000);
+  const passwordFailures = new RateLimiter(10, 15 * 60_000);
 
   function rpcError(ctx: Context, status: number, message: string, headers: Record<string, string> = {}): void {
     json(ctx.res, status, { jsonrpc: '2.0', error: { code: -32000, message }, id: null }, headers);
@@ -254,10 +316,11 @@ export function createMcp({ config, service }: { config: Config; service: ListSe
       rpcError(ctx, 429, 'Too many requests with a wrong token.', { 'Retry-After': String(wait) });
       return true;
     }
-    const token = bearer(ctx.req) ?? match[1];
-    if (!token || !safeEqual(token, config.adminToken)) {
-      if (token) failures.fail(ctx.ip);
-      rpcError(ctx, 401, 'Send the admin token as "Authorization: Bearer <token>".', {
+    const secret = bearer(ctx.req) ?? match[1];
+    const token = secret ? verifyToken(service.store, secret) : undefined;
+    if (!token) {
+      if (secret) failures.hit(ctx.ip);
+      rpcError(ctx, 401, 'Send an MCP token as "Authorization: Bearer <token>". Tokens are made on the server with the CLI.', {
         'WWW-Authenticate': 'Bearer realm="shared-list"',
       });
       return true;
@@ -278,7 +341,7 @@ export function createMcp({ config, service }: { config: Config; service: ListSe
       return true;
     }
 
-    const server = buildServer(service, config.publicUrl || ctx.origin);
+    const server = buildServer({ service, token, origin: config.publicUrl || ctx.origin, passwordFailures });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     ctx.res.on('close', () => {
       void transport.close();

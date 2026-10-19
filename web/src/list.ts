@@ -8,6 +8,7 @@ import { checkbox, display, tag } from './cells.ts';
 import { clear, h, icon, storage, toast } from './dom.ts';
 import { openItemEditor } from './editor.ts';
 import { ago, hasCents, money, plain } from './format.ts';
+import { CREATED_KEY } from './landing.ts';
 import { renderLock } from './lock.ts';
 import { openSettings } from './settings.ts';
 import type { CellValue, Column, Item, ListPayload } from '../../shared/types.ts';
@@ -625,6 +626,14 @@ export function mountList(root: HTMLElement, id: string): void {
       list = res!.list;
       render();
       startPolling();
+      try {
+        if (sessionStorage.getItem(CREATED_KEY) === id) {
+          sessionStorage.removeItem(CREATED_KEY);
+          toast('List created. Share the link, and send the password separately.');
+        }
+      } catch {
+        // Storage blocked; the note is a nicety.
+      }
     })
     .catch((error) => {
       if (error instanceof ApiError && error.status === 401) locked();

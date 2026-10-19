@@ -10,6 +10,8 @@ export interface Limits {
   maxCellChars: number;
   maxCssBytes: number;
   maxBodyBytes: number;
+  /** New lists one address may make from the web in an hour. */
+  createsPerHour: number;
   /** Creating lists and adding rows stop once the database file reaches this. */
   maxDbBytes: number;
 }
@@ -22,7 +24,6 @@ export interface Config {
   /** Origin used in links the server hands out, e.g. `https://example.com`. Empty means "from the request". */
   publicUrl: string;
   dataDir: string;
-  adminToken: string;
   sessionSecret: Buffer;
   /** Believe X-Real-IP / X-Forwarded-For. Only safe when a proxy is the only thing that can connect. */
   trustProxy: boolean;
@@ -48,14 +49,14 @@ function normalizeBase(value: string): string {
  * in the data directory, so a self-hosted install works with no configuration
  * and still survives restarts.
  */
-function persistentSecret(dataDir: string, file: string, fromEnv: string | undefined): { value: string; created: boolean } {
-  if (fromEnv) return { value: fromEnv.trim(), created: false };
+function persistentSecret(dataDir: string, file: string, fromEnv: string | undefined): { value: string } {
+  if (fromEnv) return { value: fromEnv.trim() };
   const path = join(dataDir, file);
-  if (existsSync(path)) return { value: readFileSync(path, 'utf8').trim(), created: false };
+  if (existsSync(path)) return { value: readFileSync(path, 'utf8').trim() };
   const value = randomBytes(32).toString('base64url');
   writeFileSync(path, value + '\n', { mode: 0o600 });
   chmodSync(path, 0o600);
-  return { value, created: true };
+  return { value };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -65,10 +66,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const listen = env.LISTEN ?? env.PORT ?? '8787';
   const isSocket = !/^\d+$/.test(listen);
 
-  const admin = persistentSecret(dataDir, 'admin-token', env.ADMIN_TOKEN);
-  if (admin.created) {
-    console.log(`Generated an admin token in ${join(dataDir, 'admin-token')}`);
-  }
   const session = persistentSecret(dataDir, 'session-secret', env.SESSION_SECRET);
 
   return {
@@ -76,7 +73,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     basePath: normalizeBase(env.BASE_PATH ?? '/'),
     publicUrl: (env.PUBLIC_URL ?? '').replace(/\/+$/, ''),
     dataDir,
-    adminToken: admin.value,
     sessionSecret: Buffer.from(session.value),
     trustProxy: env.TRUST_PROXY ? env.TRUST_PROXY === '1' || env.TRUST_PROXY === 'true' : isSocket,
     backupKeep: int(env.BACKUP_KEEP, 7),
@@ -89,6 +85,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       maxCellChars: int(env.MAX_CELL_CHARS, 5000),
       maxCssBytes: int(env.MAX_CSS_BYTES, 64 * 1024),
       maxBodyBytes: int(env.MAX_BODY_BYTES, 1024 * 1024),
+      createsPerHour: int(env.MAX_CREATES_PER_HOUR, 10),
       maxDbBytes: int(env.MAX_DB_MB, 100) * 1024 * 1024,
     },
   };

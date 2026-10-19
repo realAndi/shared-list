@@ -41,9 +41,7 @@ export function randomId(length: number, prefix = ''): string {
 }
 
 /** Paths the app itself answers on, so no list can be named after one. */
-export const RESERVED_IDS = new Set([
-  'admin', 'api', 'mcp', 'assets', 'healthz', 'new', 'static', 'login', 'logout', 'favicon',
-]);
+export const RESERVED_IDS = new Set(['api', 'mcp', 'assets', 'healthz', 'new', 'static', 'favicon']);
 
 export function validateListId(raw: unknown): string {
   if (typeof raw !== 'string') throw invalid('The list id must be a string.');

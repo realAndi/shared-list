@@ -4,13 +4,14 @@ import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createApp, type App } from '../server/app.ts';
 import { loadConfig, type Config } from '../server/config.ts';
-
-export const ADMIN = 'test-admin-token-0123456789';
+import { createToken } from '../server/tokens.ts';
 
 export interface Running {
   app: App;
   config: Config;
   base: string;
+  /** Mint an MCP token, the way the CLI does. */
+  token(name: string): string;
   stop(): Promise<void>;
 }
 
@@ -18,7 +19,6 @@ export async function start(env: Record<string, string> = {}): Promise<Running> 
   const dataDir = mkdtempSync(join(tmpdir(), 'shared-list-test-'));
   const config = loadConfig({
     DATA_DIR: dataDir,
-    ADMIN_TOKEN: ADMIN,
     BASE_PATH: '/shared-list',
     BACKUP_KEEP: '0',
     WEB_DIR: join(dataDir, 'no-web'),
@@ -31,6 +31,7 @@ export async function start(env: Record<string, string> = {}): Promise<Running> 
     app,
     config,
     base: `http://127.0.0.1:${port}/shared-list/`,
+    token: (name) => createToken(app.store, name).token,
     stop: async () => {
       await app.close();
       rmSync(dataDir, { recursive: true, force: true });

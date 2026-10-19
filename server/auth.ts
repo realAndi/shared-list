@@ -101,10 +101,10 @@ export function sessionCookie(name: string, value: string, path: string, secure:
 // --- rate limiting ------------------------------------------------------------
 
 /**
- * Counts failures per key in a fixed window. Only failures are counted, so
- * someone who knows the password is never slowed down by the limit.
+ * Counts hits per key in a fixed window. For passwords only failures are hit,
+ * so someone who knows the password is never slowed down by the limit.
  */
-export class FailureLimiter {
+export class RateLimiter {
   private readonly max: number;
   private readonly windowMs: number;
   private readonly hits = new Map<string, { count: number; resetAt: number }>();
@@ -122,7 +122,7 @@ export class FailureLimiter {
     return Math.ceil((entry.resetAt - Date.now()) / 1000);
   }
 
-  fail(key: string): void {
+  hit(key: string): void {
     const at = Date.now();
     const entry = this.hits.get(key);
     if (!entry || entry.resetAt <= at) this.hits.set(key, { count: 1, resetAt: at + this.windowMs });
