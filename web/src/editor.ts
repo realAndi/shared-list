@@ -139,8 +139,15 @@ export function openItemEditor({ list, item, canEdit, onSave, onDelete, onLookup
         control,
         info && info.url === value
           ? linkStatus(info, onLookup ? () => void onLookup().then(() => dialog.close()) : undefined)
-          : column.type === 'url' && column.lookup !== false && !item
-            ? h('p', { class: 'sl-hint' }, 'Paste a shop link and the price, photo and name fill in by themselves.')
+          : column.type === 'url' && column.lookup !== false
+            ? item && typeof value === 'string' && onLookup
+              ? h('p', { class: 'sl-hint sl-link-status' },
+                  'This link hasn’t been looked up.',
+                  h('button', { type: 'button', class: 'sl-text-button', on: { click: () => void onLookup().then(() => dialog.close()) } }, 'Fill in price and photo'),
+                )
+              : !item
+                ? h('p', { class: 'sl-hint' }, 'Paste a shop link and the price, photo and name fill in by themselves.')
+                : null
             : null,
       ),
     );

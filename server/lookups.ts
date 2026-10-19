@@ -120,12 +120,33 @@ export class Lookups {
     ).then(() => undefined);
   }
 
-  /** Lookups that were pending when the server last stopped. */
+  /**
+   * At startup: lookups that were pending when the server stopped, and links
+   * that were never looked up at all, because they were added before lookups
+   * existed or while a column had them switched off.
+   */
   resume(): void {
     const jobs: Job[] = [];
     for (const id of this.store.ids()) {
       const row = this.store.get(id);
-      for (const item of row?.doc.items ?? []) {
+      if (!row) continue;
+      const columns = row.doc.columns.filter((c) => c.type === 'url' && c.lookup !== false);
+      const unseen = row.doc.items.some((item) =>
+        columns.some((c) => typeof item.values[c.id] === 'string' && !item.links?.[c.id]),
+      );
+      if (unseen) {
+        // Marked pending first, so the rows say so while they wait.
+        this.store.update(id, (fresh) => {
+          const stamp = new Date().toISOString();
+          for (const item of fresh.doc.items) {
+            for (const c of columns) {
+              const url = item.values[c.id];
+              if (typeof url === 'string' && !item.links?.[c.id]) (item.links ??= {})[c.id] = { url, status: 'pending', checked_at: stamp };
+            }
+          }
+        });
+      }
+      for (const item of this.store.get(id)?.doc.items ?? []) {
         for (const [column, info] of Object.entries(item.links ?? {})) {
           if (info.status === 'pending') jobs.push({ list: id, item: item.id, column, url: info.url });
         }

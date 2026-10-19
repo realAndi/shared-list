@@ -207,3 +207,18 @@ test('the same link is fetched once, however many rows it is in', async () => {
   await settled(tab, id);
   assert.equal(fetched.filter((u) => u === 'https://shop.example/once').length - before, 1);
 });
+
+test('links from before lookups existed are looked up when the server starts', async () => {
+  pages['https://shop.example/old'] = { ...couch, title: 'Old link' };
+  const { tab, id } = await shoppingList();
+  // Switched off, a link goes in without a lookup, like one from an older version.
+  await tab.request('PATCH', `api/lists/${id}/columns/link`, { lookup: false });
+  await tab.request('POST', `api/lists/${id}/items`, { values: { Link: 'https://shop.example/old' } });
+  await tab.request('PATCH', `api/lists/${id}/columns/link`, { lookup: true });
+  assert.equal((await settled(tab, id)).items[0].links, undefined);
+
+  server.app.service.lookups.resume();
+  const item = (await settled(tab, id)).items[0];
+  assert.equal(item.values.item, 'Old link');
+  assert.equal(item.links.link.status, 'done');
+});
