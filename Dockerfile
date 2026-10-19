@@ -12,6 +12,8 @@ COPY shared ./shared
 RUN npx vite build
 
 FROM node:24-alpine
+# Lets a host prune this app's old images without touching anyone else's.
+LABEL org.opencontainers.image.source="https://github.com/realAndi/shared-list"
 WORKDIR /app
 ENV NODE_ENV=production \
     DATA_DIR=/data \
