@@ -1,0 +1,31 @@
+# A starting point for running Shared List with Docker Compose behind a
+# reverse proxy on the same machine. Copy it next to a checkout of this repo:
+#
+#   docker compose -f compose.example.yml up -d --build
+#   docker compose -f compose.example.yml exec app cat /data/admin-token
+#
+# Then point the proxy at 127.0.0.1:8787 (see nginx.example.conf).
+
+services:
+  app:
+    build: ..
+    restart: unless-stopped
+    # 127.0.0.1 only: Docker publishes ports past ufw/iptables, so binding to
+    # 0.0.0.0 would put the app on the internet without the proxy's TLS.
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      # Serve at a sub-path, e.g. https://example.com/lists/. Use / for a whole domain.
+      BASE_PATH: /
+      # The origin in links the server hands out (MCP replies, admin page).
+      PUBLIC_URL: https://lists.example.com
+      # The proxy sets X-Real-IP and X-Forwarded-Proto; trust them.
+      TRUST_PROXY: "1"
+      # ADMIN_TOKEN and SESSION_SECRET are generated into /data on first start
+      # if you don't set them here.
+    volumes:
+      - ./data:/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 192m
