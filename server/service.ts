@@ -1,7 +1,7 @@
 // The operations both the web API and the MCP tools offer, each one a single
 // transaction. Callers have already decided the caller may do it.
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { Limits } from './config.ts';
 import { AppError, invalid } from './errors.ts';
 import { hashPassword, verifyPassword } from './auth.ts';
@@ -9,6 +9,9 @@ import {
   addColumn,
   addItems,
   emptyDoc,
+  fillFromLookups,
+  fillTargets,
+  looksLikePicture,
   moveItem,
   randomId,
   removeColumn,
@@ -22,6 +25,7 @@ import {
   validateListId,
   validatePassword,
   validateTitle,
+  UPLOAD_PATH,
   type ColumnPatch,
 } from './model.ts';
 import type { Job, Lookups } from './lookups.ts';
@@ -229,11 +233,25 @@ export class ListService {
 
   addColumns(id: string, inputs: unknown, position?: number): { row: ListRow; result: Column[] } {
     if (!Array.isArray(inputs) || inputs.length === 0) throw invalid('Send at least one column.');
-    return this.change(id, (row) => addColumnsTo(row.doc, inputs as ColumnInput[], this.limits, position));
+    return this.change(id, (row) => {
+      const added = addColumnsTo(row.doc, inputs as ColumnInput[], this.limits, position);
+      fillFromLookups(row.doc, new Set(added.map((c) => c.id)), this.limits);
+      return added;
+    });
   }
 
   updateColumn(id: string, key: string, patch: ColumnPatch): { row: ListRow; result: { column: Column; cleared: number } } {
-    return this.change(id, (row) => updateColumn(row.doc, key, patch, this.limits));
+    return this.change(id, (row) => {
+      const result = updateColumn(row.doc, key, patch, this.limits);
+      // A column that just became something a lookup fills, or a link column told to fill new columns.
+      const targets = new Set<string>();
+      if (patch.type !== undefined) targets.add(result.column.id);
+      if (patch.fill !== undefined) {
+        for (const target of Object.values(fillTargets(row.doc, result.column))) if (target) targets.add(target.id);
+      }
+      fillFromLookups(row.doc, targets, this.limits);
+      return result;
+    });
   }
 
   removeColumn(id: string, key: string): { row: ListRow; result: Column } {
@@ -288,6 +306,32 @@ export class ListService {
     return this.lookups.preview(value);
   }
 
+  /**
+   * Keeps a picture someone uploaded and returns the path a cell holds for it.
+   * It belongs to the list, is only shown behind its password, and is dropped
+   * once no cell has used it for a day.
+   */
+  uploadImage(id: string, data: unknown): string {
+    this.get(id);
+    this.checkStorage();
+    if (typeof data !== 'string' || !data) throw invalid('Send the picture as base64 in "data".');
+    const bytes = Buffer.from(data.replace(/^data:[^,]*,/, ''), 'base64');
+    if (bytes.length > this.limits.maxImageBytes) {
+      throw new AppError('too_large', `A picture can be at most ${Math.floor(this.limits.maxImageBytes / 1024 / 1024)} MB.`);
+    }
+    const type = pictureType(bytes);
+    if (!type) throw invalid('That is not a JPEG, PNG, WebP or GIF picture.');
+    const name = `${randomBytes(8).toString('hex')}.${type.ext}`;
+    this.store.insertImage({ id: name, list_id: id, type: type.mime, data: bytes, created_at: new Date().toISOString() });
+    return `api/lists/${id}/images/${name}`;
+  }
+
+  image(id: string, name: string): { type: string; data: Uint8Array } {
+    const image = this.store.image(id, name);
+    if (!image) throw new AppError('not_found', 'No such picture in this list.');
+    return image;
+  }
+
   removeItems(id: string, itemIds: unknown): { row: ListRow; result: string[] } {
     return this.change(id, (row) => removeItems(row.doc, itemIds));
   }
@@ -317,18 +361,29 @@ function addColumnsTo(doc: ListDoc, inputs: ColumnInput[], limits: Limits, posit
   return added;
 }
 
+/** What a picture's first bytes say it is. */
+function pictureType(bytes: Buffer): { mime: string; ext: string } | undefined {
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { mime: 'image/png', ext: 'png' };
+  if (bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') return { mime: 'image/webp', ext: 'webp' };
+  if (/^GIF8[79]a/.test(bytes.subarray(0, 6).toString('latin1'))) return { mime: 'image/gif', ext: 'gif' };
+  return undefined;
+}
+
 /**
  * Marks the links that are new in these rows as pending and returns the
  * lookups to run once the change is saved. `force` looks every link up again.
+ * An image column counts when it holds a page rather than a picture.
  */
 function markLookups(list: string, doc: ListDoc, items: Item[], before: Map<string, Record<string, CellValue>>, force = false): Job[] {
   const jobs: Job[] = [];
-  const columns = doc.columns.filter((c) => c.type === 'url' && c.lookup !== false);
+  const columns = doc.columns.filter((c) => (c.type === 'url' && c.lookup !== false) || c.type === 'image');
   const stamp = new Date().toISOString();
   for (const item of items) {
     for (const column of columns) {
       const url = item.values[column.id];
-      if (typeof url !== 'string') {
+      const page = typeof url === 'string' && (column.type === 'url' || (!UPLOAD_PATH.test(url) && !looksLikePicture(url)));
+      if (!page) {
         if (item.links) delete item.links[column.id];
         continue;
       }

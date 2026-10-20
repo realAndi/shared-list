@@ -222,3 +222,51 @@ test('links from before lookups existed are looked up when the server starts', a
   assert.equal(item.values.item, 'Old link');
   assert.equal(item.links.link.status, 'done');
 });
+
+test('a Photo column added after the links were looked up fills from them', async () => {
+  pages['https://shop.example/lamp'] = { ...couch, title: 'Lamp', image: 'https://img.example/lamp.jpg' };
+  const tab = new Browser(server.base);
+  const made = await tab.request('POST', 'api/lists', {
+    title: 'No photos yet',
+    password: 'pass1234',
+    columns: [{ name: 'Name' }, { name: 'Link', type: 'url' }],
+  });
+  const id = made.data.list.id;
+  await tab.request('POST', `api/lists/${id}/items`, { values: { Link: 'https://shop.example/lamp' } });
+  await tab.request('POST', `api/lists/${id}/items`, { values: { Name: 'Rug' } });
+  await settled(tab, id);
+
+  const added = await tab.request('POST', `api/lists/${id}/columns`, { name: 'Photo', type: 'image' });
+  assert.equal(added.data.list.items[0].values.photo, 'https://img.example/lamp.jpg');
+  assert.equal(added.data.list.items[1].values.photo, undefined);
+
+  // A photo someone cleared stays cleared when an unrelated column is added.
+  const itemId = added.data.list.items[0].id;
+  await tab.request('PATCH', `api/lists/${id}/items/${itemId}`, { values: { Photo: null } });
+  const again = await tab.request('POST', `api/lists/${id}/columns`, { name: 'Price', type: 'currency' });
+  assert.equal(again.data.list.items[0].values.photo, undefined);
+  assert.equal(again.data.list.items[0].values.price, 183.53);
+});
+
+test('a shop link pasted into an image column becomes the photo on that page', async () => {
+  pages['https://shop.example/chair'] = { ...couch, image: 'https://img.example/chair.jpg' };
+  const { tab, id } = await shoppingList();
+  const added = await tab.request('POST', `api/lists/${id}/items`, { values: { Photo: 'https://shop.example/chair' } });
+  assert.equal(added.data.list.items[0].links.photo.status, 'pending');
+  let item = (await settled(tab, id)).items[0];
+  assert.equal(item.values.photo, 'https://img.example/chair.jpg');
+  assert.equal(item.links, undefined);
+
+  // A link to a picture is used as it is.
+  const before = fetched.length;
+  await tab.request('POST', `api/lists/${id}/items`, { values: { Photo: 'https://img.example/table.png' } });
+  item = (await settled(tab, id)).items[1];
+  assert.equal(item.values.photo, 'https://img.example/table.png');
+  assert.equal(fetched.length, before);
+
+  pages['https://shop.example/nophoto'] = new FetchError('No price or photo on that page.');
+  await tab.request('POST', `api/lists/${id}/items`, { values: { Photo: 'https://shop.example/nophoto' } });
+  item = (await settled(tab, id)).items[2];
+  assert.equal(item.values.photo, 'https://shop.example/nophoto');
+  assert.equal(item.links.photo.status, 'failed');
+});

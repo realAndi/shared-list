@@ -5,6 +5,7 @@ import { display, tag } from './cells.ts';
 import { openDialog } from './dialog.ts';
 import { h, icon } from './dom.ts';
 import { money } from './format.ts';
+import { pictureIn, uploadImage } from './images.ts';
 import type { CellValue, Column, Item, LinkInfo, ListPayload } from '../../shared/types.ts';
 
 interface EditorOptions {
@@ -15,12 +16,14 @@ interface EditorOptions {
   onDelete?(): Promise<void>;
   /** Look the row's links up again. */
   onLookup?(): Promise<void>;
+  /** Add an image column, so photos found on linked pages have somewhere to go. */
+  onAddPhotoColumn?(): Promise<void>;
 }
 
 /** What the last lookup of a link said, under its field. */
-function linkStatus(info: LinkInfo, retry?: () => void): HTMLElement {
+function linkStatus(info: LinkInfo, column: Column, retry?: () => void): HTMLElement {
   let text: string;
-  if (info.status === 'pending') text = 'Looking up the price and photo…';
+  if (info.status === 'pending') text = column.type === 'image' ? 'Finding the photo on that page…' : 'Looking up the price and photo…';
   else if (info.status === 'failed') text = `Couldn’t read this page. ${info.error ?? ''}`.trim();
   else {
     const found = [info.price !== undefined ? (info.currency ? money(info.price, info.currency) : String(info.price)) : null, info.image ? 'a photo' : null]
@@ -47,7 +50,7 @@ function autoGrow(area: HTMLTextAreaElement): void {
   requestAnimationFrame(fit);
 }
 
-function field(column: Column, value: CellValue | undefined): { control: HTMLElement; read: Reader } {
+function field(column: Column, value: CellValue | undefined, listId: string): { control: HTMLElement; read: Reader } {
   const id = `sl-field-${column.id}`;
   switch (column.type) {
     case 'checkbox': {
@@ -91,15 +94,43 @@ function field(column: Column, value: CellValue | undefined): { control: HTMLEle
       return { control: area, read: () => area.value };
     }
     case 'image': {
-      const input = h('input', { id, class: 'sl-input', type: 'url', inputmode: 'url', placeholder: 'https://… link to a picture', value: String(value ?? '') });
+      // A path, not a URL, once a picture has been uploaded, so the input is plain text.
+      const input = h('input', { id, class: 'sl-input', type: 'text', inputmode: 'url', placeholder: 'Link to a picture or a shop page', value: String(value ?? '') });
       const preview = h('div', { class: 'sl-preview' });
+      const status = h('p', { class: 'sl-hint', role: 'status' });
       const show = () => {
         preview.replaceChildren();
-        if (/^https?:\/\//.test(input.value)) preview.append(display(column, input.value, false) ?? '');
+        if (/^(https?:\/\/|api\/)/.test(input.value)) preview.append(display(column, input.value, false) ?? '');
       };
+      const file = h('input', { type: 'file', accept: 'image/*', class: 'sl-visually-hidden', tabindex: -1, 'aria-hidden': 'true' });
+      const choose = h('button', { type: 'button', class: 'sl-button sl-button--small', on: { click: () => file.click() } }, icon('image', 16), 'Upload photo');
+      const upload = async (picture: File) => {
+        choose.disabled = true;
+        status.textContent = 'Uploading…';
+        try {
+          input.value = await uploadImage(listId, picture);
+          status.textContent = '';
+          show();
+        } catch (e) {
+          status.textContent = (e as Error).message;
+        } finally {
+          choose.disabled = false;
+          file.value = '';
+        }
+      };
+      file.addEventListener('change', () => file.files?.[0] && void upload(file.files[0]));
+      input.addEventListener('paste', (event) => {
+        const picture = pictureIn(event.clipboardData);
+        if (!picture) return;
+        event.preventDefault();
+        void upload(picture);
+      });
       input.addEventListener('change', show);
       show();
-      return { control: h('div', { class: 'sl-field-stack' }, input, preview), read: () => input.value.trim() };
+      return {
+        control: h('div', { class: 'sl-field-stack' }, input, h('div', { class: 'sl-upload' }, choose, file, status), preview),
+        read: () => input.value.trim(),
+      };
     }
     default: {
       const kinds: Record<string, Record<string, string>> = {
@@ -114,7 +145,7 @@ function field(column: Column, value: CellValue | undefined): { control: HTMLEle
   }
 }
 
-export function openItemEditor({ list, item, canEdit, onSave, onDelete, onLookup }: EditorOptions): void {
+export function openItemEditor({ list, item, canEdit, onSave, onDelete, onLookup, onAddPhotoColumn }: EditorOptions): void {
   const readers = new Map<string, Reader>();
   const form = h('form', { class: 'sl-form', novalidate: true });
 
@@ -130,7 +161,7 @@ export function openItemEditor({ list, item, canEdit, onSave, onDelete, onLookup
       );
       continue;
     }
-    const { control, read } = field(column, value);
+    const { control, read } = field(column, value, list.id);
     readers.set(column.id, read);
     const info = item?.links?.[column.id];
     form.append(
@@ -138,7 +169,7 @@ export function openItemEditor({ list, item, canEdit, onSave, onDelete, onLookup
         column.type === 'checkbox' ? null : h('label', { class: 'sl-label', id: `sl-field-${column.id}-label`, for: `sl-field-${column.id}` }, column.name),
         control,
         info && info.url === value
-          ? linkStatus(info, onLookup ? () => void onLookup().then(() => dialog.close()) : undefined)
+          ? linkStatus(info, column, onLookup ? () => void onLookup().then(() => dialog.close()) : undefined)
           : column.type === 'url' && column.lookup !== false
             ? item && typeof value === 'string' && onLookup
               ? h('p', { class: 'sl-hint sl-link-status' },
@@ -149,6 +180,13 @@ export function openItemEditor({ list, item, canEdit, onSave, onDelete, onLookup
                 ? h('p', { class: 'sl-hint' }, 'Paste a shop link and the price, photo and name fill in by themselves.')
                 : null
             : null,
+        // The page had a photo, but the list has nowhere to show it.
+        info?.image && column.type === 'url' && onAddPhotoColumn && !list.columns.some((c) => c.type === 'image')
+          ? h('p', { class: 'sl-hint' },
+              h('button', { type: 'button', class: 'sl-text-button', on: { click: () => void onAddPhotoColumn().then(() => dialog.close()) } }, 'Add a Photo column'),
+              ' to show the photos from your links.',
+            )
+          : null,
       ),
     );
   }

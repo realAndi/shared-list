@@ -8,6 +8,7 @@ import { checkbox, display, tag } from './cells.ts';
 import { clear, h, icon, storage, toast } from './dom.ts';
 import { openItemEditor } from './editor.ts';
 import { ago, hasCents, money, plain } from './format.ts';
+import { pictureIn, uploadImage } from './images.ts';
 import { CREATED_KEY } from './landing.ts';
 import { renderLock } from './lock.ts';
 import { openSettings } from './settings.ts';
@@ -256,7 +257,7 @@ export function mountList(root: HTMLElement, id: string): void {
         number: { type: 'text', inputmode: 'decimal' },
         currency: { type: 'text', inputmode: 'decimal' },
         url: { type: 'url' },
-        image: { type: 'url', placeholder: 'Link to a picture' },
+        image: { placeholder: 'Link, or paste a picture' },
         date: { type: 'date' },
       };
       input = h('input', { class: 'sl-cell-input', type: 'text', ...kinds[column.type], 'aria-label': column.name });
@@ -296,13 +297,55 @@ export function mountList(root: HTMLElement, id: string): void {
         void finish(true, () => focusCell(item.id, column.id, step));
       }
     });
-    input.addEventListener('blur', () => void finish(true));
+    if (column.type === 'image') {
+      input.addEventListener('paste', (event) => {
+        const picture = pictureIn((event as ClipboardEvent).clipboardData);
+        if (!picture) return;
+        event.preventDefault();
+        input.disabled = true;
+        input.value = 'Uploading…';
+        void uploadImage(list.id, picture).then(
+          (path) => {
+            input.value = path;
+            void finish(true);
+          },
+          (e: Error) => {
+            toast(e.message, 'error');
+            void finish(false);
+          },
+        );
+      });
+    }
+    input.addEventListener('blur', () => {
+      // Blur fires when the input is disabled for an upload; the upload finishes it.
+      if (!input.disabled) void finish(true);
+    });
     if (column.type === 'select') input.addEventListener('change', () => void finish(true));
 
     cell.dataset.editing = '';
     cell.replaceChildren(input);
     input.focus();
     if (input instanceof HTMLInputElement && input.type === 'text') input.select();
+  }
+
+  /** A picture dragged from the desktop onto an image cell goes into it. */
+  function dropPicture(cell: HTMLElement, item: Item, column: Column): void {
+    cell.addEventListener('dragover', (event) => {
+      if (![...(event.dataTransfer?.items ?? [])].some((i) => i.kind === 'file')) return;
+      event.preventDefault();
+      cell.dataset.drop = '';
+    });
+    cell.addEventListener('dragleave', () => delete cell.dataset.drop);
+    cell.addEventListener('drop', (event) => {
+      delete cell.dataset.drop;
+      const picture = pictureIn(event.dataTransfer);
+      if (!picture) return;
+      event.preventDefault();
+      void uploadImage(list.id, picture).then(
+        (path) => mutate(() => api.updateItem(list.id, item.id, { [column.id]: path })).catch(() => undefined),
+        (e: Error) => toast(e.message, 'error'),
+      );
+    });
   }
 
   /** After Tab, open the next editable cell along the row. */
@@ -325,6 +368,9 @@ export function mountList(root: HTMLElement, id: string): void {
           : mutate(() => api.addItem(list.id, values), 'Item added'),
       onDelete: item ? () => mutate(() => api.removeItem(list.id, item.id), 'Item deleted') : undefined,
       onLookup: item ? () => mutate(() => api.lookup(list.id, item.id), 'Looking it up again') : undefined,
+      onAddPhotoColumn: canEdit()
+        ? () => mutate(() => api.addColumn(list.id, { name: list.columns.some((c) => c.name.toLowerCase() === 'photo') ? 'Product photo' : 'Photo', type: 'image' }), 'Photo column added')
+        : undefined,
     });
   }
 
@@ -379,8 +425,9 @@ export function mountList(root: HTMLElement, id: string): void {
         if (lookup?.status === 'pending') {
           cell.append(h('span', { class: 'sl-lookup', role: 'status', data: { state: 'pending' } }, 'Looking up…'));
         } else if (lookup?.status === 'failed' && canEdit()) {
-          cell.append(h('span', { class: 'sl-lookup', data: { state: 'failed' }, title: lookup.error ?? '' }, 'No price found'));
+          cell.append(h('span', { class: 'sl-lookup', data: { state: 'failed' }, title: lookup.error ?? '' }, column.type === 'image' ? 'No photo found' : 'No price found'));
         }
+        if (column.type === 'image' && canEdit()) dropPicture(cell, item, column);
         if (canEdit()) {
           cell.addEventListener('click', (event) => {
             if (!inlineEditing.matches) return;

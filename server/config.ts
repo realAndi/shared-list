@@ -10,6 +10,8 @@ export interface Limits {
   maxCellChars: number;
   maxCssBytes: number;
   maxBodyBytes: number;
+  /** One uploaded picture, after the browser has shrunk it. */
+  maxImageBytes: number;
   /** New lists one address may make from the web in an hour. */
   createsPerHour: number;
   /** Creating lists and adding rows stop once the database file reaches this. */
@@ -85,6 +87,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       maxCellChars: int(env.MAX_CELL_CHARS, 5000),
       maxCssBytes: int(env.MAX_CSS_BYTES, 64 * 1024),
       maxBodyBytes: int(env.MAX_BODY_BYTES, 1024 * 1024),
+      maxImageBytes: int(env.MAX_IMAGE_KB, 2048) * 1024,
       createsPerHour: int(env.MAX_CREATES_PER_HOUR, 10),
       maxDbBytes: int(env.MAX_DB_MB, 100) * 1024 * 1024,
     },

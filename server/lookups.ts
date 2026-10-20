@@ -1,15 +1,16 @@
 // When a link lands in a link column, look the page up in the background and
-// fill the row's empty price, photo and name from it. Nothing a person typed is
+// fill the row's empty price, photo and name from it. A page link put in an
+// image column is swapped for the photo on that page. Nothing a person typed is
 // ever overwritten, and a lookup that finishes after its link was changed or
 // removed is dropped.
 
 import { RateLimiter } from './auth.ts';
 import { extract, isAmazon, isBotWall, merge, type Preview } from './extract.ts';
 import { FetchError, getPage } from './fetcher.ts';
-import { coerce, fillTargets } from './model.ts';
+import { coerce, fillFromLink } from './model.ts';
 import type { Limits } from './config.ts';
 import type { Store } from './store.ts';
-import type { Item, LinkInfo } from '../shared/types.ts';
+import type { LinkInfo } from '../shared/types.ts';
 
 const BOT = 'SharedListBot/1.0 (+https://github.com/realAndi/shared-list)';
 const BROWSER = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
@@ -188,38 +189,33 @@ export class Lookups {
       const info = item?.links?.[job.column];
       // The link was changed or removed while it was being looked up.
       if (!item || !info || info.url !== job.url || item.values[job.column] !== job.url) return;
+      const column = row.doc.columns.find((c) => c.id === job.column);
+      if (!column) return;
+      if (column.type === 'image') {
+        // The cell becomes the picture itself; only a failure is worth keeping with the row.
+        if (preview?.image) {
+          try {
+            item.values[job.column] = coerce(column, preview.image, this.limits, false);
+            delete item.links![job.column];
+            if (!Object.keys(item.links!).length) delete item.links;
+            item.updated_at = new Date().toISOString();
+            return;
+          } catch {
+            error = 'The photo on that page has a link this list cannot hold.';
+          }
+        }
+        item.links![job.column] = { url: job.url, status: 'failed', checked_at: new Date().toISOString(), error: error ?? 'No photo on that page.' };
+        return;
+      }
       const next: LinkInfo = { url: job.url, status: preview ? 'done' : 'failed', checked_at: new Date().toISOString() };
       if (preview) {
         Object.assign(next, { site: preview.site, title: preview.title, image: preview.image, price: preview.price, currency: preview.currency });
-        this.fill(row.doc, item, job.column, preview);
+        fillFromLink(row.doc, item, column, preview, this.limits);
+        item.updated_at = new Date().toISOString();
       } else {
         next.error = error;
       }
       item.links![job.column] = Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined)) as unknown as LinkInfo;
     });
-  }
-
-  private fill(doc: Parameters<typeof fillTargets>[0], item: Item, columnId: string, preview: Preview): void {
-    const column = doc.columns.find((c) => c.id === columnId);
-    if (!column) return;
-    const targets = fillTargets(doc, column);
-    const empty = (id: string) => item.values[id] === undefined || item.values[id] === null || item.values[id] === '';
-    const put = (target: (typeof targets)[keyof typeof targets], value: unknown) => {
-      if (!target || value === undefined || !empty(target.id)) return;
-      try {
-        const coerced = coerce(target, value, this.limits, false);
-        if (coerced !== null) item.values[target.id] = coerced;
-      } catch {
-        // A value the column will not take is left out, never forced in.
-      }
-    };
-    // A price in another currency would be a wrong number, so it is left for a person.
-    const price = targets.price;
-    if (preview.price !== undefined && price && (price.type === 'number' || !preview.currency || preview.currency === price.currency)) {
-      put(price, preview.price);
-    }
-    put(targets.image, preview.image);
-    put(targets.title, preview.title);
-    item.updated_at = new Date().toISOString();
   }
 }

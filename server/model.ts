@@ -291,6 +291,60 @@ export function fillTargets(doc: ListDoc, column: Column): { price?: Column; ima
   };
 }
 
+/** What a lookup found, as a page preview or as kept with a row. */
+export interface Found {
+  title?: string;
+  image?: string;
+  price?: number;
+  currency?: string;
+}
+
+/**
+ * Fills a row's empty cells from what the link in `column` led to. `only`
+ * limits it to some target columns. Nothing a person typed is overwritten, and
+ * a price in another currency is left for a person, since it would be a wrong number.
+ */
+export function fillFromLink(doc: ListDoc, item: Item, column: Column, found: Found, limits: Limits, only?: Set<string>): boolean {
+  const targets = fillTargets(doc, column);
+  const empty = (id: string) => item.values[id] === undefined || item.values[id] === null || item.values[id] === '';
+  let filled = false;
+  const put = (target: Column | undefined, value: unknown) => {
+    if (!target || value === undefined || !empty(target.id) || (only && !only.has(target.id))) return;
+    try {
+      const coerced = coerce(target, value, limits, false);
+      if (coerced !== null) {
+        item.values[target.id] = coerced;
+        filled = true;
+      }
+    } catch {
+      // A value the column will not take is left out, never forced in.
+    }
+  };
+  const price = targets.price;
+  if (found.price !== undefined && price && (price.type === 'number' || !found.currency || found.currency === price.currency)) {
+    put(price, found.price);
+  }
+  put(targets.image, found.image);
+  put(targets.title, found.title);
+  if (filled) item.updated_at = new Date().toISOString();
+  return filled;
+}
+
+/**
+ * Fills the `targets` columns from links that were already looked up, so a
+ * Photo column added after the links were pasted shows their photos straight away.
+ */
+export function fillFromLookups(doc: ListDoc, targets: Set<string>, limits: Limits): void {
+  if (!targets.size) return;
+  for (const column of doc.columns) {
+    if (column.type !== 'url') continue;
+    for (const item of doc.items) {
+      const info = item.links?.[column.id];
+      if (info?.status === 'done' && info.url === item.values[column.id]) fillFromLink(doc, item, column, info, limits, targets);
+    }
+  }
+}
+
 export interface ColumnPatch extends DisplayPatch {
   name?: string;
   type?: ColumnType;
@@ -418,8 +472,21 @@ function parseNumber(raw: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** Where an uploaded picture lives, relative to the app. Only image columns hold these. */
+export const UPLOAD_PATH = /^api\/lists\/[a-z0-9-]{1,64}\/images\/[0-9a-f]{16}\.(jpg|png|webp|gif)$/;
+
+/** A link that ends like a picture file. Anything else in an image column is taken for a page with a photo on it. */
+export function looksLikePicture(url: string): boolean {
+  try {
+    return /\.(jpe?g|png|webp|gif|avif|svg)$/i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
 function parseUrl(raw: string, column: Column): string {
   let value = raw.trim();
+  if (column.type === 'image' && UPLOAD_PATH.test(value)) return value;
   // "ikea.com/p/123" is how links get typed on a phone.
   if (!/^[a-z][a-z0-9+.-]*:/i.test(value) && /^[\w-]+(\.[\w-]+)+/.test(value)) value = `https://${value}`;
   let url: URL;

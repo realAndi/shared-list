@@ -1115,6 +1115,28 @@ button.sl-sort:hover,
   height: 6rem;
 }
 
+.sl-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.sl-upload .sl-hint:empty {
+  display: none;
+}
+
+.sl-button--small {
+  min-height: 2rem;
+  padding: 0 0.75rem;
+  font-size: 0.875rem;
+}
+
+.sl-cell[data-drop] {
+  outline: 2px dashed var(--sl-accent);
+  outline-offset: -2px;
+}
+
 .sl-dialog-actions {
   display: flex;
   align-items: center;

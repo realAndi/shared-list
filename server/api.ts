@@ -191,6 +191,24 @@ export function createApi({ config, service }: ApiDeps) {
       reply(ctx, service.removeColumn(id, decodeURIComponent(column)).row, role);
     }],
 
+    ['POST', new RegExp(`^api/lists/${ID}/images$`), async (ctx, [id]) => {
+      editor(ctx, id);
+      // Base64 is a third bigger than the picture it carries.
+      const { data } = await readJson(ctx.req, Math.ceil(config.limits.maxImageBytes * 1.4) + 1024);
+      json(ctx.res, 200, { path: service.uploadImage(id, data) });
+    }],
+
+    ['GET', new RegExp(`^api/lists/${ID}/images/([0-9a-f]{16}\\.(?:jpg|png|webp|gif))$`), async (ctx, [id, name]) => {
+      access(ctx, id);
+      const image = service.image(id, name);
+      send(ctx.res, 200, Buffer.from(image.data), {
+        'Content-Type': image.type,
+        // A picture never changes under its name.
+        'Cache-Control': 'private, max-age=31536000, immutable',
+        'X-Content-Type-Options': 'nosniff',
+      });
+    }],
+
     ['POST', new RegExp(`^api/lists/${ID}/items$`), async (ctx, [id]) => {
       const role = editor(ctx, id);
       const input = await body(ctx);

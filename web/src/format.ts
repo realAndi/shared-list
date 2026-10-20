@@ -58,6 +58,7 @@ export function ago(iso: string): string {
 export function plain(column: Column, value: CellValue | undefined): string {
   if (value === null || value === undefined) return '';
   if (column.type === 'checkbox') return value ? column.name : '';
+  if (column.type === 'image' && String(value).startsWith('api/')) return 'photo';
   if (column.type === 'url' || column.type === 'image') return host(String(value));
   return String(value);
 }

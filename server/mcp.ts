@@ -31,10 +31,10 @@ Links added to a link column are looked up in the background: the row's empty pr
 This token sees the lists it created and the ones it has opened. To work on a list someone else made, ask the person for its password and call open_list.`;
 
 const COLUMN_TYPE_HELP =
-  'text, number, currency (a number shown as money), url (a link), image (a link to a picture, shown as a thumbnail), checkbox (true/false; the first one marks a row as done), select (one of a set of labeled, colored options), date (YYYY-MM-DD).';
+  'text, number, currency (a number shown as money), url (a link), image (a picture, shown as a thumbnail: a link to the picture, or to a shop page whose photo is then used; pictures people upload are paths like api/lists/<id>/images/<name>.jpg), checkbox (true/false; the first one marks a row as done), select (one of a set of labeled, colored options), date (YYYY-MM-DD).';
 
 const VALUES_HELP =
-  'Object of column (name or id) → value. text: string. number/currency: number ("$1,299" also works). checkbox: true/false. url/image: http(s) link. select: an option label; a new label becomes a new option. date: YYYY-MM-DD. null empties a cell.';
+  'Object of column (name or id) → value. text: string. number/currency: number ("$1,299" also works). checkbox: true/false. url/image: http(s) link; a page link in an image column is swapped for the photo on that page. select: an option label; a new label becomes a new option. date: YYYY-MM-DD. null empties a cell.';
 
 const cellValue = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 const values = z.record(z.string(), cellValue).describe(VALUES_HELP);

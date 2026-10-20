@@ -36,6 +36,15 @@ export interface RowSummary {
   updated_at: string;
 }
 
+export interface ImageRow {
+  /** The file name the cell's path ends in, e.g. `3f9c0a1b2c3d4e5f.jpg`. */
+  id: string;
+  list_id: string;
+  type: string;
+  data: Uint8Array;
+  created_at: string;
+}
+
 export interface TokenRow {
   id: string;
   name: string;
@@ -87,6 +96,15 @@ export class Store {
         epoch    INTEGER NOT NULL,
         PRIMARY KEY (token_id, list_id)
       ) STRICT;
+      -- Pictures people uploaded into image columns. They go when their list does.
+      CREATE TABLE IF NOT EXISTS images (
+        id         TEXT PRIMARY KEY,
+        list_id    TEXT NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+        type       TEXT NOT NULL,
+        data       BLOB NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS images_list ON images (list_id);
     `);
     // Databases from before tokens existed.
     const columns = this.db.prepare('PRAGMA table_info(lists)').all() as { name: string }[];
@@ -186,6 +204,35 @@ export class Store {
 
   delete(id: string): boolean {
     return Number(this.db.prepare('DELETE FROM lists WHERE id = ?').run(id).changes) > 0;
+  }
+
+  // --- images ---------------------------------------------------------------
+
+  insertImage(image: ImageRow): void {
+    this.db
+      .prepare('INSERT INTO images (id, list_id, type, data, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(image.id, image.list_id, image.type, image.data, image.created_at);
+  }
+
+  image(listId: string, id: string): { type: string; data: Uint8Array } | undefined {
+    return this.db.prepare('SELECT type, data FROM images WHERE list_id = ? AND id = ?').get(listId, id) as
+      | { type: string; data: Uint8Array }
+      | undefined;
+  }
+
+  /**
+   * Drops pictures older than `before` that no cell of their list mentions. The
+   * wait covers a picture uploaded into a form that has not been saved yet.
+   */
+  pruneImages(before: string): number {
+    return Number(
+      this.db
+        .prepare(
+          `DELETE FROM images WHERE created_at < ?
+             AND NOT EXISTS (SELECT 1 FROM lists l WHERE l.id = images.list_id AND instr(l.doc, images.id) > 0)`,
+        )
+        .run(before).changes,
+    );
   }
 
   // --- tokens ---------------------------------------------------------------

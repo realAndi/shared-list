@@ -39,6 +39,10 @@ export function createApp(config: Config, options: AppOptions = {}): App {
   const mcp = createMcp({ config, service });
   const web = createStatic(config);
   startBackups(store, join(config.dataDir, 'backups'), config.backupKeep);
+  const prune = () => store.pruneImages(new Date(Date.now() - 86_400_000).toISOString());
+  prune();
+  const pruning = setInterval(prune, 6 * 3600_000);
+  pruning.unref();
 
   function context(req: IncomingMessage, res: Context['res']): Context | undefined {
     const proto = config.trustProxy
@@ -102,6 +106,7 @@ export function createApp(config: Config, options: AppOptions = {}): App {
     service,
     close: () =>
       new Promise((resolve) => {
+        clearInterval(pruning);
         server.close(() => {
           store.close();
           resolve();

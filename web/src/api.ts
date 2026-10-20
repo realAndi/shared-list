@@ -57,6 +57,7 @@ export const api = {
     request<ListResponse>('PATCH', `${list(id)}/items/${encodeURIComponent(item)}`, { values }),
   removeItem: (id: string, item: string) => request<ListResponse>('DELETE', `${list(id)}/items/${encodeURIComponent(item)}`),
   lookup: (id: string, item: string) => request<ListResponse>('POST', `${list(id)}/items/${encodeURIComponent(item)}/lookup`),
+  uploadImage: (id: string, data: string) => request<{ path: string }>('POST', `${list(id)}/images`, { data }),
   moveItem: (id: string, item: string, index: number) =>
     request<ListResponse>('POST', `${list(id)}/items/${encodeURIComponent(item)}/move`, { index }),
   create: (input: Record<string, unknown>) => request<ListResponse>('POST', 'api/lists', input),

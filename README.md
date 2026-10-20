@@ -30,9 +30,13 @@ Live at <https://reallyitsandi.com/shared-list/>.
   rows that aren't ticked yet. Choice columns become colored tags and can group
   the rows. Links show their site; image links show a thumbnail. Columns can
   be narrow or wide, hidden from the table, and the list can have a default sort.
+- **Pictures.** An image column takes a photo from your phone or computer
+  (upload, paste or drag it in), a link to a picture, or a link to a shop page,
+  which is swapped for that page's photo.
 - **Paste a link, get the price.** A shop link fills in the row's price, photo
   and name from the page. Paste one straight into *Add item…* and that's the
-  whole row. See [Link lookups](#link-lookups).
+  whole row. Add a Photo column later and it fills from the links already
+  there. See [Link lookups](#link-lookups).
 - **Per-list CSS.** Every list has a stylesheet that restyles its page for
   everyone. The default look is built on `--sl-*` variables and stable class
   names, so most themes are a few lines. See [Styling](#styling).
@@ -139,7 +143,10 @@ lookups fail with that reason. The fetcher first identifies itself as
 leaves gaps, it asks again as a browser would.
 
 Each link column has its own switch for this, and a choice of which columns it
-fills (`fill` in `update_column`). Lookups are capped per list and per hour.
+fills (`fill` in `update_column`). What a lookup found stays with the row, so a
+Photo, price or name column added afterwards fills its empty cells from it
+straight away. A shop link put in an image column is looked up the same way,
+and the cell becomes the page's photo. Lookups are capped per list and per hour.
 
 The fetcher only ever connects to the public internet. The check happens in
 the connection's own DNS lookup and again after every redirect. A link to
@@ -217,10 +224,14 @@ All optional.
 | `MAX_COLUMNS` | `30` | Per list |
 | `MAX_CELL_CHARS` | `5000` | |
 | `MAX_CSS_BYTES` | `65536` | Per list |
-| `MAX_DB_MB` | `100` | Creating lists and adding rows stop when the database reaches this |
+| `MAX_IMAGE_KB` | `2048` | One uploaded picture |
+| `MAX_DB_MB` | `100` | Creating lists, adding rows and uploading pictures stop when the database reaches this |
 
-Images are links, never uploads, so the database stays small. A list with a
-thousand rows is a few hundred KB.
+A list with a thousand rows is a few hundred KB. Uploaded pictures are shrunk
+in the browser to 1600 pixels on their longest side before they are sent,
+usually to 100–300 KB, and kept in the same SQLite file, behind the list's
+password. A picture no cell uses is deleted after a day, and a list's pictures
+go when it does.
 
 ## How it is put together
 

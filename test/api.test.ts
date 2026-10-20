@@ -161,3 +161,31 @@ test('the base path is enforced and redirected', async () => {
   assert.equal(bare.headers.get('location'), '/shared-list/');
   assert.equal((await fetch(server.base + 'healthz')).status, 200);
 });
+
+test('pictures upload into a list and show only behind its password', async () => {
+  const { tab, list } = await create({ title: 'Photos', password: 'pass1234', preset: 'shopping' });
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const uploaded = await tab.request('POST', `api/lists/${list.id}/images`, { data: `data:image/png;base64,${png.toString('base64')}` });
+  assert.equal(uploaded.status, 200, JSON.stringify(uploaded.data));
+  const path: string = uploaded.data.path;
+  assert.match(path, new RegExp(`^api/lists/${list.id}/images/[0-9a-f]{16}\\.png$`));
+
+  const added = await tab.request('POST', `api/lists/${list.id}/items`, { values: { Item: 'Lamp', Photo: path } });
+  assert.equal(added.data.list.items[0].values.photo, path);
+  assert.equal(added.data.list.items[0].links, undefined, 'an upload is never looked up');
+
+  const shown = await tab.request('GET', path);
+  assert.equal(shown.status, 200);
+  assert.equal(shown.headers.get('content-type'), 'image/png');
+  assert.equal(shown.headers.get('content-length'), String(png.length));
+  assert.equal((await new Browser(server.base).request('GET', path)).status, 401);
+
+  const notPicture = await tab.request('POST', `api/lists/${list.id}/images`, { data: Buffer.from('<svg onload=alert(1)>').toString('base64') });
+  assert.equal(notPicture.status, 400);
+
+  // Unused pictures go after a day; used ones stay.
+  const unused = (await tab.request('POST', `api/lists/${list.id}/images`, { data: png.toString('base64') })).data.path as string;
+  assert.equal(server.app.store.pruneImages(new Date(Date.now() + 1000).toISOString()), 1);
+  assert.equal((await tab.request('GET', unused)).status, 404);
+  assert.equal((await tab.request('GET', path)).status, 200);
+});
