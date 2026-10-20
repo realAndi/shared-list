@@ -715,6 +715,52 @@ button.sl-sort:hover,
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.06);
 }
 
+.sl-thumb-button {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  cursor: zoom-in;
+}
+
+.sl-lightbox {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-out;
+}
+
+.sl-lightbox[open] {
+  display: grid;
+  place-items: center;
+}
+
+.sl-lightbox::backdrop {
+  background: rgb(10 14 20 / 0.86);
+}
+
+.sl-lightbox-image {
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100dvh - 5rem);
+  border-radius: 8px;
+  object-fit: contain;
+  background: #fff;
+}
+
+.sl-lightbox-close {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  right: 0.75rem;
+  color: #fff;
+  background: rgb(255 255 255 / 0.12);
+}
+
 .sl-thumb--broken {
   display: grid;
   place-items: center;

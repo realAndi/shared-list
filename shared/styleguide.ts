@@ -67,7 +67,8 @@ Inside cells
   .sl-lookup[data-state="pending|failed"]
              the note next to a link while its page is read, or when it could not be
   .sl-tag[data-color][data-value]
-  .sl-link   .sl-thumb   .sl-check[aria-checked="true"]
+  .sl-link   .sl-thumb (inside .sl-thumb-button)   .sl-check[aria-checked="true"]
+  .sl-lightbox  .sl-lightbox-image   the photo enlarged when a thumbnail is tapped
 
 ## Data attributes worth knowing
 

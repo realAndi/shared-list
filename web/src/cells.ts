@@ -72,10 +72,43 @@ export function display(column: Column, value: CellValue | undefined, cents: boo
         decoding: 'async',
         referrerPolicy: 'no-referrer',
       });
-      img.addEventListener('error', () => img.replaceWith(h('span', { class: 'sl-thumb sl-thumb--broken', title: 'Image did not load' }, icon('image', 16))));
-      return img;
+      const button = h(
+        'button',
+        {
+          type: 'button',
+          class: 'sl-thumb-button',
+          'aria-label': `Enlarge ${column.name.toLowerCase()}`,
+          on: {
+            click: (event: MouseEvent) => {
+              // The row and the cell would open their own editors.
+              event.stopPropagation();
+              openPicture(String(value));
+            },
+          },
+        },
+        img,
+      );
+      img.addEventListener('error', () => button.replaceWith(h('span', { class: 'sl-thumb sl-thumb--broken', title: 'Image did not load' }, icon('image', 16))));
+      return button;
     }
     case 'checkbox':
       return null;
   }
+}
+
+/** A picture at full size, over everything. Any tap or Escape closes it. */
+export function openPicture(src: string): void {
+  const dialog = h(
+    'dialog',
+    { class: 'sl-lightbox', 'aria-label': 'Photo' },
+    h('img', { class: 'sl-lightbox-image', src, alt: '', referrerPolicy: 'no-referrer' }),
+    h('button', { type: 'button', class: 'sl-icon-button sl-lightbox-close', 'aria-label': 'Close' }, icon('x')),
+  );
+  dialog.addEventListener('click', (event) => {
+    event.stopPropagation();
+    dialog.close();
+  });
+  dialog.addEventListener('close', () => dialog.remove());
+  document.body.appendChild(dialog);
+  dialog.showModal();
 }
