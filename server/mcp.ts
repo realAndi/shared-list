@@ -300,7 +300,7 @@ function buildServer({ service, token, origin, passwordFailures }: Deps): McpSer
 
   server.registerTool('preview_link', {
     title: 'Look up a link',
-    description: 'Read a shop page and return the product name, photo and price it shows, without saving anything. Works for Temu, Amazon and most shops that publish product data; some big stores block servers outright, and then this says so.',
+    description: 'Read a shop page and return the product name, photo and price it shows, without saving anything. Works for Temu, Amazon, IKEA and most shops that publish product data; some big stores block servers outright, and then this says so.',
     inputSchema: { url: z.string().describe('Any product link, including short and share links.') },
     annotations: { readOnlyHint: true, openWorldHint: true },
   }, ({ url }) => run(() => service.preview(url)));

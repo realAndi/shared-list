@@ -7,6 +7,7 @@
 import { RateLimiter } from './auth.ts';
 import { extract, isAmazon, isBotWall, merge, type Preview } from './extract.ts';
 import { FetchError, getPage } from './fetcher.ts';
+import { ikeaPreview, isIkea } from './ikea.ts';
 import { coerce, fillFromLink } from './model.ts';
 import type { Limits } from './config.ts';
 import type { Store } from './store.ts';
@@ -18,7 +19,8 @@ const BROWSER = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537
 /**
  * Asks as itself first: plenty of shops, Temu among them, hand a named crawler
  * the page with its product data in it. If that leaves the price or the photo
- * out, it asks again as a browser. Amazon only ever answers the browser.
+ * out, it asks again as a browser. Amazon only ever answers the browser, and
+ * IKEA neither, so its products come from its own search API.
  */
 export async function fetchPreview(url: string): Promise<Preview> {
   let host: string;
@@ -26,6 +28,11 @@ export async function fetchPreview(url: string): Promise<Preview> {
     host = new URL(url).hostname.toLowerCase();
   } catch {
     throw new FetchError('That is not a link.');
+  }
+  // IKEA refuses servers its product pages, so a product link is asked for by its number.
+  if (isIkea(host)) {
+    const found = await ikeaPreview(url);
+    if (found) return found;
   }
   const agents = isAmazon(host) ? [BROWSER] : [BOT, BROWSER];
   let found: Preview | undefined;

@@ -136,7 +136,9 @@ It reads, in order of trust:
 3. microdata (`itemprop="price"`),
 
 and Amazon's own markup, which has none of those for its price. Temu, Amazon
-and Shopify stores work. Some big retailers (IKEA, Walmart, Home Depot, Etsy,
+and Shopify stores work. IKEA refuses servers its product pages, so an IKEA
+product link is looked up by the article number at its end, through the search
+API IKEA's own site uses. Some other big retailers (Walmart, Home Depot, Etsy,
 eBay, and some furniture brands) refuse to answer any server at all, and those
 lookups fail with that reason. The fetcher first identifies itself as
 `SharedListBot`, which gets some shops to serve their product data. If that

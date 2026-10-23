@@ -2,6 +2,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { extract, parsePrice } from '../server/extract.ts';
 import { FetchError, getPage, isPrivateAddress } from '../server/fetcher.ts';
+import { fromIkeaSearch, ikeaPreview, ikeaProduct } from '../server/ikea.ts';
 import type { Preview } from '../server/extract.ts';
 import { Browser, start, type Running } from './helpers.ts';
 
@@ -57,6 +58,55 @@ test('relative images resolve against the page, and odd prices are not guessed',
   assert.equal(parsePrice('$1,299.50'), 1299.5);
   assert.equal(parsePrice('USD 85'), 85);
   assert.equal(parsePrice('free'), undefined);
+});
+
+test('IKEA: the article number comes from the link, the product from its search API', async () => {
+  assert.deepEqual(ikeaProduct('https://www.ikea.com/us/en/p/kallax-shelf-unit-white-80275887/'), { country: 'us', language: 'en', number: '80275887' });
+  assert.deepEqual(ikeaProduct('https://www.ikea.com/gb/en/p/friheten-corner-sofa-bed-s69216757/?utm_source=share'), { country: 'gb', language: 'en', number: '69216757' });
+  assert.deepEqual(ikeaProduct('https://ikea.com/de/de/p/-50263848'), { country: 'de', language: 'de', number: '50263848' });
+  assert.equal(ikeaProduct('https://www.ikea.com/us/en/cat/bookcases-st002/'), undefined);
+  assert.equal(ikeaProduct('https://www.ikea.com.fake.example/us/en/p/x-80275887/'), undefined);
+
+  const answer = {
+    searchResultPage: {
+      products: {
+        main: {
+          items: [
+            { product: { name: 'KALLAX', typeName: 'Shelf insert', itemNo: '10278159', mainImageUrl: 'https://www.ikea.com/us/en/images/products/insert.jpg', salesPrice: { numeral: 15, currencyCode: 'USD' } } },
+            {
+              product: {
+                name: 'KALLAX',
+                typeName: 'Shelf unit',
+                itemNo: '80275887',
+                pipUrl: 'https://www.ikea.com/us/en/p/kallax-shelf-unit-white-80275887/',
+                mainImageUrl: 'https://www.ikea.com/us/en/images/products/kallax-shelf-unit-white__0644757_pe702939_s5.jpg',
+                salesPrice: { currencyCode: 'USD', current: { prefix: '$', wholeNumber: '89', separator: '.', decimals: '99' } },
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+  const link = 'https://www.ikea.com/us/en/p/kallax-shelf-unit-white-80275887/';
+  let asked = '';
+  const preview = await ikeaPreview(link, async (url) => {
+    asked = url;
+    return answer;
+  });
+  assert.match(asked, /^https:\/\/sik\.search\.blue\.cdtapps\.com\/us\/en\/search-result-page\?q=80275887&/);
+  assert.deepEqual(preview, {
+    url: link,
+    site: 'ikea.com',
+    title: 'KALLAX Shelf unit',
+    image: 'https://www.ikea.com/us/en/images/products/kallax-shelf-unit-white__0644757_pe702939_s5.jpg',
+    price: 89.99,
+    currency: 'USD',
+  });
+
+  // A search that only finds other products is not this product.
+  assert.equal(fromIkeaSearch(answer, { country: 'us', language: 'en', number: '99999999' }, link), undefined);
+  await assert.rejects(ikeaPreview('https://www.ikea.com/us/en/p/x-99999999/', async () => answer), /nothing for article 99999999/);
 });
 
 // --- refusing private addresses ------------------------------------------------

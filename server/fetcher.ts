@@ -79,9 +79,11 @@ export interface FetchOptions {
   timeoutMs?: number;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Ask for and read JSON rather than a page. */
+  json?: boolean;
 }
 
-function once(url: URL, userAgent: string, timeoutMs: number): Promise<IncomingMessage> {
+function once(url: URL, userAgent: string, timeoutMs: number, json = false): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
       method: 'GET',
@@ -90,7 +92,7 @@ function once(url: URL, userAgent: string, timeoutMs: number): Promise<IncomingM
       timeout: timeoutMs,
       headers: {
         'User-Agent': userAgent,
-        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
+        Accept: json ? 'application/json' : 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate, br',
       },
@@ -168,7 +170,7 @@ export async function getPage(start: string, opts: FetchOptions): Promise<Page> 
     checkUrl(url);
     const left = deadline - Date.now();
     if (left <= 0) throw new FetchError('The site took too long to answer.');
-    const res = await once(url, opts.userAgent, left);
+    const res = await once(url, opts.userAgent, left, opts.json);
     const status = res.statusCode ?? 0;
     const location = res.headers.location;
     if (status >= 300 && status < 400 && location) {
@@ -177,8 +179,8 @@ export async function getPage(start: string, opts: FetchOptions): Promise<Page> 
       continue;
     }
     const contentType = String(res.headers['content-type'] ?? '').toLowerCase();
-    // Only pages are read. For anything else the headers say all there is to know.
-    if (!/text\/html|application\/xhtml\+xml/.test(contentType)) {
+    // Only pages, or JSON when that was asked for, are read. For anything else the headers say all there is to know.
+    if (!opts.json && !/text\/html|application\/xhtml\+xml/.test(contentType)) {
       res.destroy();
       return { url: url.href, status, contentType, body: '' };
     }
